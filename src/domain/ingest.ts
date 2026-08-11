@@ -6,6 +6,19 @@ import {
 } from "./download";
 
 const URL_PATTERN = /^https?:\/\//i;
+const ENGINE_CONTROLLED_HEADERS = new Set([
+  "accept-encoding",
+  "connection",
+  "content-length",
+  "content-range",
+  "host",
+  "if-range",
+  "range",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
 const FORBIDDEN_OPTIONS = new Set([
   "--config",
   "-K",
@@ -73,6 +86,27 @@ export function parseHeaderLines(raw: string): HeaderEntry[] {
     .map(parseHeader);
 }
 
+export function normalizeHeaders(entries: HeaderEntry[]): {
+  headers: HeaderEntry[];
+  cookies: CookieEntry[];
+  warnings: string[];
+} {
+  const headers: HeaderEntry[] = [];
+  const cookies: CookieEntry[] = [];
+  const warnings: string[] = [];
+  for (const header of entries) {
+    const normalizedName = header.name.toLowerCase();
+    if (normalizedName === "cookie") {
+      cookies.push(...parseCookies(header.value));
+    } else if (ENGINE_CONTROLLED_HEADERS.has(normalizedName)) {
+      warnings.push(`Header controlado por Fluxor e ignorado: ${header.name}.`);
+    } else {
+      headers.push(header);
+    }
+  }
+  return { headers, cookies, warnings };
+}
+
 export function parseCookies(raw: string): CookieEntry[] {
   return raw
     .split(";")
@@ -136,7 +170,10 @@ export function parseRequest(input: string): ParsedRequest {
       throw new IngestError(`${token} no se admite por seguridad.`);
     }
     if (token === "-H" || token === "--header") {
-      headers.push(parseHeader(nextValue(tokens, index, token)));
+      const normalized = normalizeHeaders([parseHeader(nextValue(tokens, index, token))]);
+      headers.push(...normalized.headers);
+      cookies.push(...normalized.cookies);
+      warnings.push(...normalized.warnings);
       index += 1;
       continue;
     }

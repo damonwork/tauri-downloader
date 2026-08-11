@@ -9,8 +9,8 @@ use std::{
 
 use reqwest::{
     header::{
-        HeaderName, HeaderValue, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE, COOKIE, ETAG,
-        IF_RANGE, LAST_MODIFIED, RANGE,
+        HeaderMap, HeaderName, HeaderValue, ACCEPT_ENCODING, ACCEPT_RANGES, CONTENT_DISPOSITION,
+        CONTENT_LENGTH, CONTENT_RANGE, COOKIE, ETAG, IF_RANGE, LAST_MODIFIED, RANGE,
     },
     redirect::Policy,
     Client, RequestBuilder, StatusCode,
@@ -19,17 +19,20 @@ use thiserror::Error;
 use tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncWriteExt, BufWriter},
-    sync::mpsc::UnboundedSender,
+    sync::{mpsc::UnboundedSender, Mutex},
     task::JoinSet,
     time,
 };
 use tokio_util::sync::CancellationToken;
 
-use super::model::{DownloadItem, DownloadSource, SourceValidator, TransferSize};
+use super::model::{DownloadItem, DownloadSource, ResumeSupport, SourceValidator, TransferSize};
 
 const MAX_REDIRECTS: usize = 10;
 const MIN_SEGMENT_SIZE: u64 = 2 * 1024 * 1024;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(300);
+const METADATA_TIMEOUT: Duration = Duration::from_secs(15);
+const DEFAULT_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0";
 
 #[derive(Clone, Debug)]
 pub enum ResolvedProxy {
@@ -49,6 +52,7 @@ pub struct EngineProgress {
     pub downloaded_bytes: u64,
     pub size: TransferSize,
     pub validator: SourceValidator,
+    pub resume: ResumeSupport,
     pub speed_bytes: u64,
 }
 
@@ -57,6 +61,7 @@ pub struct EngineOutput {
     pub downloaded_bytes: u64,
     pub size: TransferSize,
     pub validator: SourceValidator,
+    pub resume: ResumeSupport,
 }
 
 #[derive(Debug, Error)]
@@ -99,6 +104,23 @@ impl EngineError {
 pub struct DownloadEngine;
 
 impl DownloadEngine {
+    pub async fn detect_file_name(
+        source: &DownloadSource,
+        proxy: &ResolvedProxy,
+    ) -> Option<String> {
+        let client = build_client(proxy, source).ok()?;
+        let request = apply_source_headers(client.head(&source.url), source).ok()?;
+        let response = time::timeout(METADATA_TIMEOUT, request.send())
+            .await
+            .ok()?
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        content_disposition_file_name(response.headers())
+            .or_else(|| file_name_from_response_url(response.url()))
+    }
+
     pub async fn run(
         input: EngineInput,
         cancellation: CancellationToken,
@@ -134,7 +156,27 @@ impl DownloadEngine {
                     &input.item.transfer.validator,
                     &probe.validator,
                 )?;
-                return run_segmented(input, client, probe, cancellation, progress).await;
+                let segmented = run_segmented(
+                    input.clone(),
+                    client.clone(),
+                    probe,
+                    cancellation.clone(),
+                    progress.clone(),
+                )
+                .await;
+                match segmented {
+                    Ok(output) => return Ok(output),
+                    Err(error) if segmented_failure_allows_single_stream(&error) => {
+                        remove_segment_partials(
+                            &input.destination_dir,
+                            &input.item.file_name,
+                            input.item.threads,
+                        )
+                        .await?;
+                        return run_single(input, client, cancellation, progress).await;
+                    }
+                    Err(error) => return Err(error),
+                }
             }
         }
 
@@ -151,6 +193,47 @@ struct ProbeResult {
     size: TransferSize,
     validator: SourceValidator,
     accepts_ranges: bool,
+}
+
+#[derive(Clone)]
+struct BandwidthLimiter {
+    bytes_per_second: u64,
+    next_available: Arc<Mutex<Instant>>,
+}
+
+impl BandwidthLimiter {
+    fn new(bytes_per_second: u64) -> Self {
+        Self {
+            bytes_per_second,
+            next_available: Arc::new(Mutex::new(Instant::now())),
+        }
+    }
+
+    async fn acquire(
+        &self,
+        bytes: usize,
+        cancellation: &CancellationToken,
+    ) -> Result<(), EngineError> {
+        if self.bytes_per_second == 0 || bytes == 0 {
+            return Ok(());
+        }
+        let wait = {
+            let mut next_available = self.next_available.lock().await;
+            let now = Instant::now();
+            if *next_available < now {
+                *next_available = now;
+            }
+            *next_available += transfer_duration(bytes, self.bytes_per_second);
+            next_available.saturating_duration_since(now)
+        };
+        if wait.is_zero() {
+            return Ok(());
+        }
+        tokio::select! {
+            _ = cancellation.cancelled() => Err(EngineError::Cancelled),
+            _ = time::sleep(wait) => Ok(()),
+        }
+    }
 }
 
 async fn probe_source(
@@ -174,11 +257,7 @@ async fn probe_source(
         .map_or(TransferSize::Unknown, |total_bytes| TransferSize::Known {
             total_bytes,
         });
-    let accepts_ranges = response
-        .headers()
-        .get(ACCEPT_RANGES)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.eq_ignore_ascii_case("bytes"));
+    let accepts_ranges = accepts_ranges(response.headers());
     Some(ProbeResult {
         size,
         validator: response_validator(response.headers()),
@@ -229,27 +308,33 @@ async fn run_single(
     }
 
     let validator = response_validator(response.headers());
+    let resume = resume_support(
+        response.status() == StatusCode::PARTIAL_CONTENT || accepts_ranges(response.headers()),
+        &validator,
+    );
     ensure_same_source(resume_at, &input.item.transfer.validator, &validator)?;
     let size = response_size(response.headers(), resume_at);
     ensure_same_size(resume_at, &input.item.transfer.size, &size)?;
     let mut output = open_partial(&partial_path, resume_at > 0).await?;
+    let limiter = BandwidthLimiter::new(input.item.speed_limit_bytes);
     let mut downloaded = resume_at;
     let mut checkpoint_bytes = downloaded;
     let mut checkpoint_at = Instant::now();
 
-    send_progress(&progress, downloaded, &size, &validator, 0);
+    send_progress(&progress, downloaded, &size, &validator, &resume, 0);
     loop {
         let next = tokio::select! {
             _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
             chunk = response.chunk() => chunk.map_err(|_| EngineError::Request)?,
         };
         let Some(chunk) = next else { break };
+        limiter.acquire(chunk.len(), &cancellation).await?;
         output.write_all(&chunk).await.map_err(EngineError::File)?;
         downloaded += chunk.len() as u64;
 
         if checkpoint_at.elapsed() >= PROGRESS_INTERVAL {
             let speed = bytes_per_second(downloaded - checkpoint_bytes, checkpoint_at.elapsed());
-            send_progress(&progress, downloaded, &size, &validator, speed);
+            send_progress(&progress, downloaded, &size, &validator, &resume, speed);
             checkpoint_bytes = downloaded;
             checkpoint_at = Instant::now();
         }
@@ -263,11 +348,12 @@ async fn run_single(
         .map_err(EngineError::File)?;
     verify_complete(downloaded, &size)?;
     finalize_partial(&partial_path, &final_path).await?;
-    send_progress(&progress, downloaded, &size, &validator, 0);
+    send_progress(&progress, downloaded, &size, &validator, &resume, 0);
     Ok(EngineOutput {
         downloaded_bytes: downloaded,
         size,
         validator,
+        resume,
     })
 }
 
@@ -285,9 +371,11 @@ async fn run_segmented(
     ensure_destination_available(&final_path).await?;
     let ranges = split_ranges(total_bytes, input.item.threads);
     let downloaded = Arc::new(AtomicU64::new(0));
+    let limiter = BandwidthLimiter::new(input.item.speed_limit_bytes);
     let mut tasks = JoinSet::new();
     let size = TransferSize::Known { total_bytes };
-    send_progress(&progress, 0, &size, &probe.validator, 0);
+    let resume = ResumeSupport::Supported;
+    send_progress(&progress, 0, &size, &probe.validator, &resume, 0);
 
     for (index, (start, end)) in ranges.iter().copied().enumerate() {
         let segment_path = segment_path(&input.destination_dir, &input.item.file_name, index);
@@ -316,6 +404,7 @@ async fn run_segmented(
             append: resumed > 0,
             downloaded: Arc::clone(&downloaded),
             cancellation: cancellation.child_token(),
+            limiter: limiter.clone(),
         };
         tasks.spawn(worker.run());
     }
@@ -333,7 +422,7 @@ async fn run_segmented(
             _ = interval.tick() => {
                 let current = downloaded.load(Ordering::Relaxed);
                 let speed = bytes_per_second(current.saturating_sub(checkpoint_bytes), checkpoint_at.elapsed());
-                send_progress(&progress, current, &size, &probe.validator, speed);
+                send_progress(&progress, current, &size, &probe.validator, &resume, speed);
                 checkpoint_bytes = current;
                 checkpoint_at = Instant::now();
             }
@@ -363,11 +452,12 @@ async fn run_segmented(
     )
     .await?;
     finalize_partial(&partial_path, &final_path).await?;
-    send_progress(&progress, total_bytes, &size, &probe.validator, 0);
+    send_progress(&progress, total_bytes, &size, &probe.validator, &resume, 0);
     Ok(EngineOutput {
         downloaded_bytes: total_bytes,
         size,
         validator: probe.validator,
+        resume,
     })
 }
 
@@ -382,6 +472,7 @@ struct SegmentWorker {
     append: bool,
     downloaded: Arc<AtomicU64>,
     cancellation: CancellationToken,
+    limiter: BandwidthLimiter,
 }
 
 impl SegmentWorker {
@@ -415,6 +506,9 @@ impl SegmentWorker {
                 chunk = response.chunk() => chunk.map_err(|_| EngineError::Request)?,
             };
             let Some(chunk) = next else { break };
+            self.limiter
+                .acquire(chunk.len(), &self.cancellation)
+                .await?;
             received_bytes += chunk.len() as u64;
             if received_bytes > expected_bytes {
                 return Err(EngineError::InvalidContentRange);
@@ -438,7 +532,11 @@ impl SegmentWorker {
 
 fn build_client(proxy: &ResolvedProxy, source: &DownloadSource) -> Result<Client, EngineError> {
     let carries_credentials = !source.headers.is_empty() || !source.cookies.is_empty();
+    let mut default_headers = HeaderMap::new();
+    default_headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
     let mut builder = Client::builder()
+        .user_agent(DEFAULT_USER_AGENT)
+        .default_headers(default_headers)
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(45))
         .redirect(if carries_credentials {
@@ -468,6 +566,16 @@ fn apply_source_headers(
             || name == CONTENT_LENGTH
             || name == CONTENT_RANGE
             || name == COOKIE
+            || matches!(
+                name.as_str(),
+                "accept-encoding"
+                    | "connection"
+                    | "host"
+                    | "te"
+                    | "trailer"
+                    | "transfer-encoding"
+                    | "upgrade"
+            )
         {
             return Err(EngineError::InvalidHeader(header.name.clone()));
         }
@@ -506,9 +614,11 @@ fn apply_if_range(
 
 fn response_validator(headers: &reqwest::header::HeaderMap) -> SourceValidator {
     if let Some(value) = headers.get(ETAG).and_then(|value| value.to_str().ok()) {
-        return SourceValidator::Etag {
-            value: value.to_owned(),
-        };
+        if !value.trim_start().starts_with("W/") {
+            return SourceValidator::Etag {
+                value: value.to_owned(),
+            };
+        }
     }
     if let Some(value) = headers
         .get(LAST_MODIFIED)
@@ -519,6 +629,123 @@ fn response_validator(headers: &reqwest::header::HeaderMap) -> SourceValidator {
         };
     }
     SourceValidator::None
+}
+
+fn accepts_ranges(headers: &reqwest::header::HeaderMap) -> bool {
+    headers
+        .get(ACCEPT_RANGES)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("bytes"))
+}
+
+fn resume_support(accepts_ranges: bool, validator: &SourceValidator) -> ResumeSupport {
+    if !accepts_ranges {
+        ResumeSupport::Unsupported {
+            reason: "El servidor no acepta solicitudes por rango".to_owned(),
+        }
+    } else if matches!(validator, SourceValidator::None) {
+        ResumeSupport::Unsupported {
+            reason: "El servidor no proporciona ETag o Last-Modified".to_owned(),
+        }
+    } else {
+        ResumeSupport::Supported
+    }
+}
+
+fn content_disposition_file_name(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    let value = headers.get(CONTENT_DISPOSITION)?.to_str().ok()?;
+    let mut regular = None;
+    for parameter in split_header_parameters(value).into_iter().skip(1) {
+        let Some((name, raw_value)) = parameter.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        let raw_value = unquote_header_value(raw_value.trim());
+        if name.eq_ignore_ascii_case("filename*") {
+            if let Some((charset, encoded)) = raw_value.split_once("''") {
+                if charset.eq_ignore_ascii_case("UTF-8") {
+                    if let Some(decoded) = percent_decode_utf8(encoded) {
+                        return Some(decoded);
+                    }
+                }
+            }
+        } else if name.eq_ignore_ascii_case("filename") && regular.is_none() {
+            regular = Some(raw_value);
+        }
+    }
+    regular.filter(|value| !value.is_empty())
+}
+
+fn split_header_parameters(value: &str) -> Vec<String> {
+    let mut parameters = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for character in value.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+        } else if character == '\\' && quoted {
+            current.push(character);
+            escaped = true;
+        } else if character == '"' {
+            quoted = !quoted;
+            current.push(character);
+        } else if character == ';' && !quoted {
+            parameters.push(current.trim().to_owned());
+            current.clear();
+        } else {
+            current.push(character);
+        }
+    }
+    parameters.push(current.trim().to_owned());
+    parameters
+}
+
+fn unquote_header_value(value: &str) -> String {
+    let value = value
+        .strip_prefix('"')
+        .and_then(|value| value.strip_suffix('"'))
+        .unwrap_or(value);
+    let mut output = String::new();
+    let mut escaped = false;
+    for character in value.chars() {
+        if escaped {
+            output.push(character);
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else {
+            output.push(character);
+        }
+    }
+    if escaped {
+        output.push('\\');
+    }
+    output
+}
+
+fn percent_decode_utf8(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = bytes.get(index + 1..index + 3)?;
+            let text = std::str::from_utf8(hex).ok()?;
+            decoded.push(u8::from_str_radix(text, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn file_name_from_response_url(url: &reqwest::Url) -> Option<String> {
+    let segment = url.path_segments()?.rfind(|segment| !segment.is_empty())?;
+    percent_decode_utf8(segment).filter(|value| !value.is_empty())
 }
 
 fn ensure_same_source(
@@ -684,6 +911,29 @@ async fn has_segment_partials(
     Ok(false)
 }
 
+async fn remove_segment_partials(
+    directory: &Path,
+    file_name: &str,
+    threads: u8,
+) -> Result<(), EngineError> {
+    for index in 0..usize::from(threads) {
+        let path = segment_path(directory, file_name, index);
+        match fs::remove_file(path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(EngineError::File(error)),
+        }
+    }
+    Ok(())
+}
+
+fn segmented_failure_allows_single_stream(error: &EngineError) -> bool {
+    matches!(
+        error,
+        EngineError::ResumeRejected | EngineError::InvalidContentRange
+    )
+}
+
 async fn ensure_destination_available(path: &Path) -> Result<(), EngineError> {
     if fs::try_exists(path).await.map_err(EngineError::File)? {
         return Err(EngineError::DestinationExists);
@@ -788,12 +1038,14 @@ fn send_progress(
     downloaded_bytes: u64,
     size: &TransferSize,
     validator: &SourceValidator,
+    resume: &ResumeSupport,
     speed_bytes: u64,
 ) {
     let _ = sender.send(EngineProgress {
         downloaded_bytes,
         size: size.clone(),
         validator: validator.clone(),
+        resume: resume.clone(),
         speed_bytes,
     });
 }
@@ -805,13 +1057,22 @@ fn bytes_per_second(bytes: u64, elapsed: Duration) -> u64 {
     (bytes as f64 / elapsed.as_secs_f64()) as u64
 }
 
+fn transfer_duration(bytes: usize, bytes_per_second: u64) -> Duration {
+    Duration::from_secs_f64(bytes as f64 / bytes_per_second as f64)
+}
+
 #[cfg(test)]
 mod tests {
-    use reqwest::header::{HeaderMap, HeaderValue, CONTENT_RANGE};
+    use reqwest::header::{
+        HeaderMap, HeaderValue, ACCEPT_RANGES, CONTENT_DISPOSITION, CONTENT_RANGE, ETAG,
+        LAST_MODIFIED,
+    };
 
     use super::{
-        content_range_total, ensure_same_source, split_ranges, validate_content_range, EngineError,
-        SourceValidator, MIN_SEGMENT_SIZE,
+        content_disposition_file_name, content_range_total, ensure_same_source,
+        file_name_from_response_url, response_validator, resume_support,
+        segmented_failure_allows_single_stream, split_ranges, transfer_duration,
+        validate_content_range, EngineError, ResumeSupport, SourceValidator, MIN_SEGMENT_SIZE,
     };
 
     #[test]
@@ -864,5 +1125,102 @@ mod tests {
             ensure_same_source(100, &SourceValidator::None, &SourceValidator::None),
             Err(EngineError::MissingValidator)
         ));
+    }
+
+    #[test]
+    fn content_disposition_prefers_utf8_file_name() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_DISPOSITION,
+            HeaderValue::from_static(
+                "attachment; filename=report.pdf; filename*=UTF-8''informe%20final.pdf",
+            ),
+        );
+
+        assert_eq!(
+            content_disposition_file_name(&headers).as_deref(),
+            Some("informe final.pdf")
+        );
+    }
+
+    #[test]
+    fn content_disposition_handles_quoted_semicolons() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            CONTENT_DISPOSITION,
+            HeaderValue::from_static("attachment; filename=\"report; final.pdf\""),
+        );
+
+        assert_eq!(
+            content_disposition_file_name(&headers).as_deref(),
+            Some("report; final.pdf")
+        );
+    }
+
+    #[test]
+    fn final_response_url_is_percent_decoded() {
+        let url = reqwest::Url::parse("https://cdn.example.com/files/video%20final.mp4").unwrap();
+
+        assert_eq!(
+            file_name_from_response_url(&url).as_deref(),
+            Some("video final.mp4")
+        );
+    }
+
+    #[test]
+    fn range_and_connection_failures_can_degrade_to_one_stream() {
+        assert!(segmented_failure_allows_single_stream(
+            &EngineError::ResumeRejected
+        ));
+        assert!(!segmented_failure_allows_single_stream(
+            &EngineError::Request
+        ));
+        assert!(!segmented_failure_allows_single_stream(
+            &EngineError::SourceChanged
+        ));
+    }
+
+    #[test]
+    fn safe_resume_requires_ranges_and_a_durable_validator() {
+        let strong = SourceValidator::Etag {
+            value: "\"abc\"".to_owned(),
+        };
+
+        assert!(matches!(
+            resume_support(true, &strong),
+            ResumeSupport::Supported
+        ));
+        assert!(matches!(
+            resume_support(false, &strong),
+            ResumeSupport::Unsupported { .. }
+        ));
+        assert!(matches!(
+            resume_support(true, &SourceValidator::None),
+            ResumeSupport::Unsupported { .. }
+        ));
+    }
+
+    #[test]
+    fn weak_etag_uses_last_modified_instead() {
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+        headers.insert(ETAG, HeaderValue::from_static("W/\"weak\""));
+        headers.insert(
+            LAST_MODIFIED,
+            HeaderValue::from_static("Tue, 11 Aug 2026 00:00:00 GMT"),
+        );
+
+        assert!(matches!(
+            response_validator(&headers),
+            SourceValidator::LastModified { .. }
+        ));
+    }
+
+    #[test]
+    fn bandwidth_duration_uses_the_aggregate_byte_rate() {
+        assert_eq!(
+            transfer_duration(512 * 1024, 1024 * 1024),
+            std::time::Duration::from_millis(500)
+        );
     }
 }

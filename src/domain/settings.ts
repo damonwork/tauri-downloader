@@ -21,6 +21,7 @@ export interface CategoryDirectories {
 export interface AppSettings {
   maxConcurrent: number;
   defaultThreads: number;
+  defaultSpeedLimitBytes: number;
   downloadDirectory: string;
   organizeByCategory: boolean;
   categoryDirectories: CategoryDirectories;
@@ -37,6 +38,7 @@ export interface AppSnapshot {
 export const DEFAULT_SETTINGS: AppSettings = {
   maxConcurrent: 3,
   defaultThreads: 8,
+  defaultSpeedLimitBytes: 0,
   downloadDirectory: "Fluxor",
   organizeByCategory: true,
   categoryDirectories: {

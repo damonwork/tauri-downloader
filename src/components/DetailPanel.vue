@@ -20,8 +20,20 @@ const validatorLabel = computed(() => {
   if (props.item.transfer.validator.kind === "none") return "Sin validador";
   return props.item.transfer.validator.kind === "etag" ? "ETag verificado" : "Last-Modified verificado";
 });
+const resumeMeta = computed(() => {
+  switch (props.item.transfer.resume.kind) {
+    case "supported": return { label: "Reanudable", detail: "Rangos y validador confirmados", className: "supported" };
+    case "unsupported": return { label: "No reanudable", detail: props.item.transfer.resume.reason, className: "unsupported" };
+    case "unknown": return { label: "Por comprobar", detail: "Se determinará al conectar con el servidor", className: "unknown" };
+  }
+});
 const failedAction = computed<DownloadAction>(() =>
   props.item.state.kind === "failed" && !props.item.state.recoverable ? "restart" : "retry",
+);
+const pausedAction = computed<DownloadAction>(() =>
+  props.item.transfer.downloadedBytes > 0 && props.item.transfer.resume.kind === "unsupported"
+    ? "restart"
+    : "resume",
 );
 
 function submitReplacement(): void {
@@ -44,16 +56,16 @@ function submitReplacement(): void {
       <div class="hero-progress"><div><strong>{{ progressOf(item) }}%</strong><span>{{ formatBytes(item.transfer.downloadedBytes) }} / {{ formatBytes(total) }}</span></div><div class="track"><i :style="{width:`${progressOf(item)}%`}"></i></div></div>
       <div class="detail-actions">
         <button v-if="item.state.kind === 'downloading'" class="primary" type="button" @click="emit('action','pause')"><AppIcon name="pause" :size="16" />Pausar</button>
-        <button v-else-if="item.state.kind !== 'completed'" class="primary" type="button" @click="emit('action',item.state.kind === 'failed' ? failedAction : 'resume')"><AppIcon :name="item.state.kind === 'failed' ? 'refresh' : 'play'" :size="16" />{{ item.state.kind === 'failed' ? (failedAction === 'restart' ? 'Reiniciar' : 'Reintentar') : 'Reanudar' }}</button>
+        <button v-else-if="item.state.kind !== 'completed'" class="primary" type="button" @click="emit('action',item.state.kind === 'failed' ? failedAction : pausedAction)"><AppIcon :name="item.state.kind === 'failed' || pausedAction === 'restart' ? 'refresh' : 'play'" :size="16" />{{ item.state.kind === 'failed' ? (failedAction === 'restart' ? 'Reiniciar' : 'Reintentar') : (pausedAction === 'restart' ? 'Reiniciar' : 'Reanudar') }}</button>
         <button type="button" @click="replacing = !replacing"><AppIcon name="link" :size="16" />Actualizar enlace</button>
       </div>
 
       <form v-if="replacing" class="replace-form" @submit.prevent="submitReplacement"><label>NUEVO ENLACE O CURL<textarea v-model="replacement" name="replacement-request" autofocus placeholder="https://... o curl 'https://...'" /></label><p v-if="replacementError">{{ replacementError }}</p><div><button type="button" @click="replacing=false">Cancelar</button><button class="save" type="submit">Validar y reanudar</button></div></form>
 
-      <section class="details-section"><h4>TRANSFERENCIA</h4><dl><div><dt>Velocidad</dt><dd>{{ formatSpeed(speed) }}</dd></div><div><dt>Conexiones</dt><dd>{{ item.threads }} segmentos</dd></div><div><dt>Identidad</dt><dd>{{ validatorLabel }}</dd></div><div><dt>Destino</dt><dd>{{ item.destination }}</dd></div></dl></section>
-      <section class="details-section"><h4>SEGMENTOS</h4><div class="segments"><i v-for="thread in item.threads" :key="thread" :class="{complete: thread/item.threads <= progressOf(item)/100}"></i></div><p class="section-note">Cada segmento escribe directamente a disco. La memoria se mantiene acotada al bloque de red actual.</p></section>
+      <section class="details-section"><h4>TRANSFERENCIA</h4><dl><div><dt>Velocidad</dt><dd>{{ formatSpeed(speed) }}</dd></div><div><dt>Tope</dt><dd>{{ item.speedLimitBytes > 0 ? formatSpeed(item.speedLimitBytes) : 'Sin límite' }}</dd></div><div><dt>Segmentos</dt><dd>Hasta {{ item.threads }}</dd></div><div><dt>Reanudación</dt><dd :title="resumeMeta.detail">{{ resumeMeta.label }}</dd></div><div><dt>Identidad</dt><dd>{{ validatorLabel }}</dd></div><div><dt>Destino</dt><dd>{{ item.destination }}</dd></div></dl></section>
+      <section class="details-section"><h4>SEGMENTOS</h4><div class="segments"><i v-for="thread in item.threads" :key="thread" :class="{complete: thread/item.threads <= progressOf(item)/100}"></i></div><p class="section-note">El valor configurado es un máximo. Si el servidor rechaza rangos o conexiones paralelas, Fluxor continúa con un solo flujo.</p></section>
       <section class="details-section"><h4>SOLICITUD</h4><dl><div><dt>Headers</dt><dd>{{ item.source.headers.length }}</dd></div><div><dt>Cookies</dt><dd>{{ item.source.cookies.length }}</dd></div><div><dt>Ruta</dt><dd class="url" :title="redactUrl(item.source.url)">{{ redactUrl(item.source.url) }}</dd></div></dl></section>
-      <div class="integrity"><AppIcon name="shield" :size="18" /><div><strong>Reanudación protegida</strong><p>Fluxor valida el rango y el origen antes de anexar bytes.</p></div></div>
+      <div class="integrity" :class="resumeMeta.className"><AppIcon name="shield" :size="18" /><div><strong>{{ resumeMeta.label }}</strong><p>{{ resumeMeta.detail }}</p></div></div>
     </div>
   </aside>
 </template>

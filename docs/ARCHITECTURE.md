@@ -41,8 +41,10 @@ rangos y archivos.
 ## Concurrencia
 
 - `DownloadManager` mantiene un límite global configurable de archivos activos.
-- Cada archivo puede usar entre 1 y 32 segmentos.
+- Cada archivo configura un máximo de 1 a 32 segmentos; el motor usa menos según tamaño y soporte del servidor.
 - Cada segmento recibe un rango no solapado y escribe en su propio archivo parcial.
+- Si el servidor rechaza el protocolo de rangos, se descartan esos parciales y se continúa con un único flujo.
+- El límite de velocidad se comparte entre todos los segmentos de una descarga, por lo que no se multiplica al aumentar conexiones.
 - `CancellationToken` coordina pausa, reinicio y borrado.
 - `RwLock` protege el snapshot; no se mantiene bloqueado durante red o disco.
 - `Mutex` protege únicamente el mapa pequeño de tareas activas.
@@ -61,8 +63,12 @@ Un parcial solo puede anexarse cuando se cumplen estas condiciones:
 5. La cantidad final de bytes coincide con el tamaño conocido.
 6. Existe un ETag o Last-Modified durable antes de anexar un parcial.
 
-Si un servidor deja de aceptar rangos mientras existen segmentos parciales, el motor falla de
-forma recuperable en vez de reiniciar silenciosamente o combinar contenido.
+Los cortes de red conservan los segmentos para reintentar. Solo un rechazo confirmado del
+protocolo de rangos activa la degradación a un flujo, evitando borrar progreso por un fallo transitorio.
+
+La UI solo marca una descarga como reanudable cuando el servidor confirma rangos y entrega un
+ETag fuerte o Last-Modified. Un ETag débil no se usa con If-Range. Si faltan esas garantías, se
+muestra el motivo y una descarga parcial solo puede reiniciarse desde cero.
 
 ## Persistencia
 

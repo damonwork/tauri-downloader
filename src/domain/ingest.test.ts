@@ -53,6 +53,19 @@ describe("parseRequest", () => {
     ]);
     expect(result.warnings.join(" ")).not.toContain("secret");
   });
+
+  it("convierte Cookie y omite headers de transporte controlados", () => {
+    const result = parseRequest(
+      "curl https://example.com/video.mp4 -H 'Cookie: session=abc; mode=fast' -H 'Accept-Encoding: gzip, br' -H 'Connection: keep-alive'",
+    );
+
+    expect(result.source.cookies).toEqual([
+      { name: "session", value: "abc" },
+      { name: "mode", value: "fast" },
+    ]);
+    expect(result.source.headers).toEqual([]);
+    expect(result.warnings).toHaveLength(2);
+  });
 });
 
 describe("credential helpers", () => {

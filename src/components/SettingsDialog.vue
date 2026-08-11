@@ -7,6 +7,15 @@ const props = defineProps<{ open: boolean; settings: AppSettings; busy: boolean 
 const emit = defineEmits<{ close: []; save: [settings: AppSettings] }>();
 const form = reactive<AppSettings>(cloneSettings(props.settings));
 const activeSection = ref<"general" | "folders">("general");
+const speedLimits = [
+  { value: 0, label: "Sin límite" },
+  { value: 1024 ** 2, label: "1 MB/s" },
+  { value: 2 * 1024 ** 2, label: "2 MB/s" },
+  { value: 5 * 1024 ** 2, label: "5 MB/s" },
+  { value: 10 * 1024 ** 2, label: "10 MB/s" },
+  { value: 25 * 1024 ** 2, label: "25 MB/s" },
+  { value: 50 * 1024 ** 2, label: "50 MB/s" },
+];
 
 const categoryFields: { key: keyof CategoryDirectories; label: string; description: string }[] = [
   { key: "video", label: "Videos", description: "MP4, MKV, MOV, WEBM" },
@@ -36,6 +45,7 @@ function cloneSettings(settings: AppSettings): AppSettings {
   return {
     maxConcurrent: settings.maxConcurrent,
     defaultThreads: settings.defaultThreads,
+    defaultSpeedLimitBytes: settings.defaultSpeedLimitBytes,
     downloadDirectory: settings.downloadDirectory,
     organizeByCategory: settings.organizeByCategory,
     categoryDirectories: { ...settings.categoryDirectories },
@@ -64,7 +74,8 @@ function cloneSettings(settings: AppSettings): AppSettings {
               <section v-if="activeSection === 'general'">
                 <div class="section-heading"><span><AppIcon name="bolt" :size="18" /></span><div><h3>Motor de transferencia</h3><p>Valores predeterminados para nuevas descargas.</p></div></div>
                 <div class="setting-row"><div><strong>Descargas simultáneas</strong><p>Archivos que pueden transferirse al mismo tiempo.</p></div><div class="stepper"><button type="button" @click="form.maxConcurrent=Math.max(1,form.maxConcurrent-1)">−</button><input v-model.number="form.maxConcurrent" name="max-concurrent" type="number" min="1" max="12" /><button type="button" @click="form.maxConcurrent=Math.min(12,form.maxConcurrent+1)">+</button></div></div>
-                <div class="setting-row"><div><strong>Segmentos por archivo</strong><p>Se ajustan automáticamente según tamaño y servidor.</p></div><select v-model.number="form.defaultThreads" name="default-threads"><option v-for="value in [1,2,4,6,8,12,16,24,32]" :key="value" :value="value">{{ value }} hilos</option></select></div>
+                <div class="setting-row"><div><strong>Máximo de segmentos</strong><p>Es un límite: Fluxor usa menos si el servidor no los tolera.</p></div><select v-model.number="form.defaultThreads" name="default-threads"><option v-for="value in [1,2,4,6,8,12,16,24,32]" :key="value" :value="value">Hasta {{ value }}</option></select></div>
+                <div class="setting-row"><div><strong>Límite de velocidad</strong><p>Tope agregado predeterminado para cada descarga.</p></div><select v-model.number="form.defaultSpeedLimitBytes" name="default-speed-limit"><option v-for="limit in speedLimits" :key="limit.value" :value="limit.value">{{ limit.label }}</option></select></div>
                 <label class="toggle-row"><div><strong>Iniciar al añadir</strong><p>Las nuevas transferencias entran directamente en la cola.</p></div><input v-model="form.startImmediately" name="start-immediately" type="checkbox" /><i></i></label>
                 <div class="info-card"><AppIcon name="activity" :size="18" /><p><strong>Configuración individual</strong>Cada descarga puede sobrescribir categoría, destino, segmentos, proxy, cookies y headers desde el diálogo de alta.</p></div>
               </section>

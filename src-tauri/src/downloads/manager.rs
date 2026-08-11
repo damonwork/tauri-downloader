@@ -20,15 +20,17 @@ use super::{
     engine::{DownloadEngine, EngineError, EngineInput, EngineProgress, ResolvedProxy},
     error::AppError,
     model::{
-        AppSettings, AppSnapshot, CreateDownloadInput, DownloadAction, DownloadItem,
-        DownloadSource, DownloadState, ProxyHealth, ProxyProfile, ProxySelection, RevisionEvent,
-        SourceValidator, TransferProgress, TransferSize,
+        AppSettings, AppSnapshot, CreateDownloadInput, DownloadAction, DownloadCategory,
+        DownloadItem, DownloadSource, DownloadState, ProxyHealth, ProxyProfile, ProxySelection,
+        ResumeSupport, RevisionEvent, SourceValidator, TransferProgress, TransferSize,
     },
 };
 
 const STORE_FILE: &str = "state.json";
+const MAX_FILE_NAME_UTF16_UNITS: usize = 200;
 const MAX_THREADS_PER_DOWNLOAD: u8 = 32;
 const MAX_CONCURRENT_DOWNLOADS: u8 = 12;
+const MAX_SPEED_LIMIT_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
 struct TaskControl {
     cancellation: CancellationToken,
@@ -105,9 +107,29 @@ impl DownloadManager {
         self.state.read().await.clone()
     }
 
-    pub async fn add(&self, input: CreateDownloadInput) -> Result<DownloadItem, AppError> {
-        validate_create_input(&input)?;
+    pub async fn add(&self, mut input: CreateDownloadInput) -> Result<DownloadItem, AppError> {
         validate_source(&input.source)?;
+        let (proxy, settings) = {
+            let state = self.state.read().await;
+            (
+                resolve_proxy(&state, &input.source.proxy)?,
+                state.settings.clone(),
+            )
+        };
+        if !input.file_name_customized && needs_remote_file_name(&input.file_name) {
+            if let Some(detected) = DownloadEngine::detect_file_name(&input.source, &proxy).await {
+                if let Some(file_name) = sanitize_detected_file_name(&detected) {
+                    input.file_name = file_name;
+                }
+            }
+        }
+        if !input.category_customized {
+            input.category = category_for_file(&input.file_name);
+        }
+        if !input.destination_customized {
+            input.destination = destination_for_category(&settings, &input.category);
+        }
+        validate_create_input(&input)?;
         let now = Utc::now();
         let item = DownloadItem {
             id: Uuid::new_v4().to_string(),
@@ -124,15 +146,13 @@ impl DownloadManager {
                 downloaded_bytes: 0,
                 size: TransferSize::Unknown,
                 validator: SourceValidator::None,
+                resume: ResumeSupport::Unknown,
             },
             threads: input.threads,
+            speed_limit_bytes: input.speed_limit_bytes,
             created_at: now,
             updated_at: now,
         };
-        {
-            let state = self.state.read().await;
-            resolve_proxy(&state, &item.source.proxy)?;
-        }
         self.reserve_output(&item).await?;
         {
             let mut state = self.state.write().await;
@@ -164,10 +184,12 @@ impl DownloadManager {
         validate_source(&source)?;
         self.set_paused(id).await?;
         self.stop_task(id).await;
+        self.reconcile_partial_progress(id).await?;
         {
             let mut state = self.state.write().await;
             let item = find_download_mut(&mut state, id)?;
             item.source = source;
+            item.transfer.resume = ResumeSupport::Unknown;
             item.state = DownloadState::Queued;
             item.updated_at = Utc::now();
             state.revision += 1;
@@ -321,6 +343,7 @@ impl DownloadManager {
     async fn pause(&self, id: &str) -> Result<(), AppError> {
         self.set_paused(id).await?;
         self.stop_task(id).await;
+        self.reconcile_partial_progress(id).await?;
         self.commit().await?;
         self.scheduler.notify_one();
         Ok(())
@@ -331,6 +354,36 @@ impl DownloadManager {
         let item = find_download_mut(&mut state, id)?;
         if !matches!(&item.state, DownloadState::Completed { .. }) {
             item.state = DownloadState::Paused;
+            item.updated_at = Utc::now();
+            state.revision += 1;
+        }
+        Ok(())
+    }
+
+    async fn reconcile_partial_progress(&self, id: &str) -> Result<(), AppError> {
+        let (directory, file_name, threads, recorded) = {
+            let state = self.state.read().await;
+            let item = find_download(&state, id)?;
+            (
+                self.destination_dir(item)?,
+                item.file_name.clone(),
+                item.threads,
+                item.transfer.downloaded_bytes,
+            )
+        };
+        let single = stored_file_len(&directory.join(format!(".{file_name}.fluxor.part"))).await?;
+        let mut segmented = 0_u64;
+        for index in 0..usize::from(threads) {
+            segmented = segmented.saturating_add(
+                stored_file_len(&directory.join(format!(".{file_name}.fluxor.part.{index}")))
+                    .await?,
+            );
+        }
+        let downloaded = single.max(segmented);
+        if downloaded != recorded {
+            let mut state = self.state.write().await;
+            let item = find_download_mut(&mut state, id)?;
+            item.transfer.downloaded_bytes = downloaded;
             item.updated_at = Utc::now();
             state.revision += 1;
         }
@@ -374,6 +427,7 @@ impl DownloadManager {
                 downloaded_bytes: 0,
                 size: TransferSize::Unknown,
                 validator: SourceValidator::None,
+                resume: ResumeSupport::Unknown,
             };
             item.state = DownloadState::Queued;
             item.updated_at = Utc::now();
@@ -547,6 +601,7 @@ impl DownloadManager {
                     item.transfer.downloaded_bytes = output.downloaded_bytes;
                     item.transfer.size = output.size;
                     item.transfer.validator = output.validator;
+                    item.transfer.resume = output.resume;
                     item.state = DownloadState::Completed {
                         completed_at: Utc::now(),
                     };
@@ -606,6 +661,7 @@ impl DownloadManager {
             item.transfer.downloaded_bytes = progress.downloaded_bytes;
             item.transfer.size = progress.size;
             item.transfer.validator = progress.validator;
+            item.transfer.resume = progress.resume;
             item.state = DownloadState::Downloading {
                 speed_bytes: progress.speed_bytes,
             };
@@ -679,10 +735,19 @@ impl DownloadManager {
             .await
         {
             Ok(mut file) => {
-                set_private_permissions(&reservation).await?;
-                file.write_all(item.id.as_bytes()).await?;
-                file.sync_all().await?;
-                Ok(())
+                let result = async {
+                    set_private_permissions(&reservation).await?;
+                    file.write_all(item.id.as_bytes()).await?;
+                    file.flush().await?;
+                    file.sync_all().await?;
+                    Ok(())
+                }
+                .await;
+                if result.is_err() {
+                    drop(file);
+                    let _ = remove_if_exists(&reservation).await;
+                }
+                result
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let owner = fs::read_to_string(&reservation).await.unwrap_or_default();
@@ -742,28 +807,7 @@ impl DownloadManager {
         let _guard = self.persistence.lock().await;
         let snapshot = self.state.read().await.clone();
         let bytes = serde_json::to_vec_pretty(&snapshot)?;
-        let temporary = self
-            .store_path
-            .with_extension(format!("json.{}.tmp", snapshot.revision));
-        fs::write(&temporary, bytes).await?;
-        set_private_permissions(&temporary).await?;
-        let file = fs::OpenOptions::new().read(true).open(&temporary).await?;
-        file.sync_all().await?;
-        if let Err(error) = fs::rename(&temporary, &self.store_path).await {
-            if !fs::try_exists(&self.store_path).await? {
-                return Err(error.into());
-            }
-            let backup = self.store_path.with_extension("json.bak");
-            remove_if_exists(&backup).await?;
-            fs::rename(&self.store_path, &backup).await?;
-            if let Err(replace_error) = fs::rename(&temporary, &self.store_path).await {
-                let _ = fs::rename(&backup, &self.store_path).await;
-                return Err(replace_error.into());
-            }
-            remove_if_exists(&backup).await?;
-        }
-        sync_parent_directory(&self.store_path).await?;
-        Ok(())
+        persist_snapshot(&self.store_path, &bytes, snapshot.revision).await
     }
 
     fn emit_revision(&self, revision: u64) {
@@ -771,6 +815,44 @@ impl DownloadManager {
             .app
             .emit("downloads://changed", RevisionEvent { revision });
     }
+}
+
+async fn persist_snapshot(path: &Path, bytes: &[u8], revision: u64) -> Result<(), AppError> {
+    let temporary = path.with_extension(format!("json.{revision}.tmp"));
+    let result = async {
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)
+            .await?;
+        file.write_all(bytes).await?;
+        file.flush().await?;
+        set_private_permissions(&temporary).await?;
+        file.sync_all().await?;
+        drop(file);
+
+        if let Err(error) = fs::rename(&temporary, path).await {
+            if !fs::try_exists(path).await? {
+                return Err(error.into());
+            }
+            let backup = path.with_extension("json.bak");
+            remove_if_exists(&backup).await?;
+            fs::rename(path, &backup).await?;
+            if let Err(replace_error) = fs::rename(&temporary, path).await {
+                let _ = fs::rename(&backup, path).await;
+                return Err(replace_error.into());
+            }
+            let _ = remove_if_exists(&backup).await;
+        }
+        sync_parent_directory(path).await
+    }
+    .await;
+
+    if result.is_err() {
+        let _ = remove_if_exists(&temporary).await;
+    }
+    result
 }
 
 async fn load_snapshot(path: &Path) -> Result<AppSnapshot, AppError> {
@@ -846,6 +928,16 @@ fn validate_create_input(input: &CreateDownloadInput) -> Result<(), AppError> {
             "Los hilos deben estar entre 1 y 32".to_owned(),
         ));
     }
+    if input.speed_limit_bytes > MAX_SPEED_LIMIT_BYTES {
+        return Err(AppError::Validation(
+            "El límite de velocidad supera el máximo permitido".to_owned(),
+        ));
+    }
+    if input.file_name.encode_utf16().count() > MAX_FILE_NAME_UTF16_UNITS {
+        return Err(AppError::Validation(format!(
+            "El nombre del archivo no puede superar {MAX_FILE_NAME_UTF16_UNITS} caracteres"
+        )));
+    }
     if input.file_name.trim().is_empty()
         || input
             .file_name
@@ -881,6 +973,114 @@ fn is_windows_reserved_name(file_name: &str) -> bool {
             .is_some_and(|value| (1..=9).contains(&value))
 }
 
+fn sanitize_detected_file_name(value: &str) -> Option<String> {
+    let base_name = value.rsplit(['/', '\\']).next().unwrap_or_default();
+    let mut sanitized = String::new();
+    let mut previous_whitespace = false;
+    for character in base_name.chars() {
+        if character.is_control() || "<>:\"/\\|?*".contains(character) {
+            sanitized.push('_');
+            previous_whitespace = false;
+        } else if character.is_whitespace() {
+            if !previous_whitespace {
+                sanitized.push(' ');
+            }
+            previous_whitespace = true;
+        } else {
+            sanitized.push(character);
+            previous_whitespace = false;
+        }
+    }
+    let mut sanitized = sanitized
+        .trim()
+        .trim_end_matches(['.', ' '])
+        .replace("..", "._");
+    if sanitized.is_empty() {
+        return None;
+    }
+    if is_windows_reserved_name(&sanitized) {
+        sanitized.insert(0, '_');
+    }
+    Some(truncate_file_name(&sanitized, MAX_FILE_NAME_UTF16_UNITS))
+}
+
+fn needs_remote_file_name(file_name: &str) -> bool {
+    let path = Path::new(file_name);
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    extension.is_empty()
+        || matches!(
+            extension.as_str(),
+            "php" | "asp" | "aspx" | "cgi" | "htm" | "html"
+        )
+        || matches!(stem.as_str(), "download" | "file" | "get" | "index")
+}
+
+fn truncate_file_name(value: &str, max_units: usize) -> String {
+    if value.encode_utf16().count() <= max_units {
+        return value.to_owned();
+    }
+    let extension = value
+        .rfind('.')
+        .filter(|index| *index > 0)
+        .map(|index| &value[index..])
+        .filter(|extension| extension.encode_utf16().count() <= 20)
+        .unwrap_or("");
+    let stem = &value[..value.len() - extension.len()];
+    let budget = max_units.saturating_sub(extension.encode_utf16().count());
+    let mut output = String::new();
+    let mut units = 0;
+    for character in stem.chars() {
+        let next = character.len_utf16();
+        if units + next > budget {
+            break;
+        }
+        output.push(character);
+        units += next;
+    }
+    format!("{}{extension}", output.trim_end_matches(['.', ' ']))
+}
+
+fn category_for_file(file_name: &str) -> DownloadCategory {
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "mp4" | "mkv" | "mov" | "webm" | "avi" => DownloadCategory::Video,
+        "zip" | "rar" | "7z" | "tar" | "gz" => DownloadCategory::Archive,
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "txt" => DownloadCategory::Document,
+        "mp3" | "wav" | "flac" | "m4a" | "ogg" => DownloadCategory::Audio,
+        _ => DownloadCategory::Other,
+    }
+}
+
+fn destination_for_category(settings: &AppSettings, category: &DownloadCategory) -> String {
+    if !settings.organize_by_category {
+        return settings.download_directory.clone();
+    }
+    let category_directory = match category {
+        DownloadCategory::Video => &settings.category_directories.video,
+        DownloadCategory::Archive => &settings.category_directories.archive,
+        DownloadCategory::Document => &settings.category_directories.document,
+        DownloadCategory::Audio => &settings.category_directories.audio,
+        DownloadCategory::Other => &settings.category_directories.other,
+    };
+    Path::new(&settings.download_directory)
+        .join(category_directory)
+        .to_string_lossy()
+        .into_owned()
+}
+
 fn reservation_path(directory: &Path, file_name: &str) -> PathBuf {
     directory.join(format!(".{file_name}.fluxor.lock"))
 }
@@ -902,6 +1102,16 @@ fn validate_source(source: &DownloadSource) -> Result<(), AppError> {
             "Uno de los headers no es válido".to_owned(),
         ));
     }
+    if let Some(header) = source
+        .headers
+        .iter()
+        .find(|header| is_engine_controlled_header(&header.name))
+    {
+        return Err(AppError::Validation(format!(
+            "El header {} está controlado por Fluxor",
+            header.name
+        )));
+    }
     if source.cookies.iter().any(|cookie| {
         cookie.name.trim().is_empty()
             || cookie.name.contains([';', '\r', '\n'])
@@ -914,6 +1124,24 @@ fn validate_source(source: &DownloadSource) -> Result<(), AppError> {
     Ok(())
 }
 
+fn is_engine_controlled_header(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "accept-encoding"
+            | "connection"
+            | "content-length"
+            | "content-range"
+            | "cookie"
+            | "host"
+            | "if-range"
+            | "range"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
 fn validate_settings(settings: &AppSettings) -> Result<(), AppError> {
     if settings.max_concurrent == 0 || settings.max_concurrent > MAX_CONCURRENT_DOWNLOADS {
         return Err(AppError::Validation(
@@ -923,6 +1151,11 @@ fn validate_settings(settings: &AppSettings) -> Result<(), AppError> {
     if settings.default_threads == 0 || settings.default_threads > MAX_THREADS_PER_DOWNLOAD {
         return Err(AppError::Validation(
             "Los hilos predeterminados deben estar entre 1 y 32".to_owned(),
+        ));
+    }
+    if settings.default_speed_limit_bytes > MAX_SPEED_LIMIT_BYTES {
+        return Err(AppError::Validation(
+            "El límite de velocidad predeterminado no es válido".to_owned(),
         ));
     }
     if !is_safe_configured_directory(&settings.download_directory) {
@@ -1004,6 +1237,14 @@ async fn remove_if_exists(path: &Path) -> Result<(), AppError> {
     }
 }
 
+async fn stored_file_len(path: &Path) -> Result<u64, AppError> {
+    match fs::metadata(path).await {
+        Ok(metadata) => Ok(metadata.len()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[cfg(unix)]
 async fn set_private_permissions(path: &Path) -> Result<(), AppError> {
     use std::os::unix::fs::PermissionsExt;
@@ -1033,8 +1274,11 @@ async fn sync_parent_directory(_path: &Path) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_safe_configured_directory, is_safe_relative_subdirectory, is_windows_reserved_name,
+        destination_for_category, is_engine_controlled_header, is_safe_configured_directory,
+        is_safe_relative_subdirectory, is_windows_reserved_name, needs_remote_file_name,
+        persist_snapshot, sanitize_detected_file_name, MAX_FILE_NAME_UTF16_UNITS,
     };
+    use crate::downloads::model::{AppSettings, DownloadCategory};
 
     #[test]
     fn rejects_windows_reserved_file_names_on_every_platform() {
@@ -1049,5 +1293,55 @@ mod tests {
         assert!(!is_safe_configured_directory("../outside"));
         assert!(!is_safe_relative_subdirectory("../Videos"));
         assert!(is_safe_relative_subdirectory("Media/Videos"));
+    }
+
+    #[test]
+    fn detected_file_names_are_sanitized_and_bounded() {
+        let detected = format!("../{}:video?.mp4", "a".repeat(250));
+        let file_name = sanitize_detected_file_name(&detected).unwrap();
+
+        assert!(file_name.encode_utf16().count() <= MAX_FILE_NAME_UTF16_UNITS);
+        assert!(file_name.ends_with(".mp4"));
+        assert!(!file_name.contains(['/', '\\', ':', '?']));
+    }
+
+    #[test]
+    fn automatic_destination_tracks_detected_category() {
+        let settings = AppSettings::default();
+
+        assert_eq!(
+            destination_for_category(&settings, &DownloadCategory::Video),
+            std::path::Path::new("Fluxor")
+                .join("Videos")
+                .to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn remote_metadata_is_only_needed_for_generic_names() {
+        assert!(needs_remote_file_name("download"));
+        assert!(needs_remote_file_name("download.php"));
+        assert!(!needs_remote_file_name("video.mp4"));
+    }
+
+    #[test]
+    fn transport_headers_are_engine_controlled() {
+        assert!(is_engine_controlled_header("Accept-Encoding"));
+        assert!(is_engine_controlled_header("Cookie"));
+        assert!(!is_engine_controlled_header("User-Agent"));
+        assert!(!is_engine_controlled_header("Referer"));
+    }
+
+    #[tokio::test]
+    async fn persisted_snapshot_replaces_existing_file() {
+        let directory = std::env::temp_dir().join(format!("fluxor-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        let path = directory.join("state.json");
+
+        persist_snapshot(&path, b"first", 1).await.unwrap();
+        persist_snapshot(&path, b"second", 2).await.unwrap();
+
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"second");
+        tokio::fs::remove_dir_all(directory).await.unwrap();
     }
 }

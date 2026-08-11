@@ -24,10 +24,16 @@ export type SourceValidator =
   | { kind: "etag"; value: string }
   | { kind: "lastModified"; value: string };
 
+export type ResumeSupport =
+  | { kind: "unknown" }
+  | { kind: "supported" }
+  | { kind: "unsupported"; reason: string };
+
 export interface TransferProgress {
   downloadedBytes: number;
   size: TransferSize;
   validator: SourceValidator;
+  resume: ResumeSupport;
 }
 
 export type DownloadState =
@@ -46,6 +52,7 @@ export interface DownloadItem {
   destination: string;
   transfer: TransferProgress;
   threads: number;
+  speedLimitBytes: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -55,9 +62,13 @@ export type DownloadAction = "pause" | "resume" | "retry" | "restart" | "remove"
 export interface CreateDownloadInput {
   source: DownloadSource;
   fileName: string;
+  fileNameCustomized: boolean;
   category: DownloadCategory;
+  categoryCustomized: boolean;
   destination: string;
+  destinationCustomized: boolean;
   threads: number;
+  speedLimitBytes: number;
   startImmediately: boolean;
 }
 
@@ -111,11 +122,43 @@ export function safeFileName(value: string): string {
     .replace(/\s+/g, " ")
     .replace(/[. ]+$/g, "")
     .trim();
-  return clean || "descarga";
+  return truncateFileName(clean || "descarga", 200);
 }
 
 export function fileNameFromUrl(value: string): string {
   const url = new URL(value);
-  const finalSegment = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() ?? "");
-  return safeFileName(finalSegment || `${url.hostname}-${Date.now()}`);
+  const disposition = url.searchParams.get("response-content-disposition");
+  const queryName = url.searchParams.get("filename") ?? url.searchParams.get("file_name");
+  const finalSegment = decodeUrlComponent(url.pathname.split("/").filter(Boolean).pop() ?? "");
+  return safeFileName(fileNameFromDisposition(disposition) || queryName || finalSegment || `descarga-${url.hostname}`);
+}
+
+function fileNameFromDisposition(value: string | null): string {
+  if (!value) return "";
+  const extended = value.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)?.[1];
+  if (extended) return decodeUrlComponent(extended.trim().replace(/^"|"$/g, ""));
+  return value.match(/filename\s*=\s*"([^"]+)"/i)?.[1]
+    ?? value.match(/filename\s*=\s*([^;]+)/i)?.[1]?.trim()
+    ?? "";
+}
+
+function decodeUrlComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function truncateFileName(value: string, maxUnits: number): string {
+  if (value.length <= maxUnits) return value;
+  const extensionAt = value.lastIndexOf(".");
+  const extension = extensionAt > 0 && value.length - extensionAt <= 20 ? value.slice(extensionAt) : "";
+  const budget = maxUnits - extension.length;
+  let stem = "";
+  for (const character of value.slice(0, extension ? extensionAt : value.length)) {
+    if (stem.length + character.length > budget) break;
+    stem += character;
+  }
+  return `${stem.replace(/[. ]+$/g, "")}${extension}` || "descarga";
 }

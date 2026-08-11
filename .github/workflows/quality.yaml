@@ -87,3 +87,24 @@ jobs:
       - name: Check desktop crate
         working-directory: src-tauri
         run: cargo check --locked
+
+  rust-windows:
+    name: Rust (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: windows-tests
+
+      - name: Run Windows persistence tests
+        working-directory: src-tauri
+        run: cargo test --locked --lib

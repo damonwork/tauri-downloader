@@ -1,6 +1,6 @@
 [package]
 name = "downloader"
-version = "0.1.0"
+version = "0.1.1"
 description = "Fluxor, a resilient desktop download manager"
 authors = ["damonwork"]
 edition = "2021"

@@ -69,6 +69,9 @@ async function addDownload(input: CreateDownloadInput): Promise<void> {
 
 async function control(id: string, action: DownloadAction): Promise<void> {
   if (action === "remove" && !window.confirm("¿Eliminar esta descarga y sus archivos parciales?")) return;
+  const item = snapshot.value.downloads.find((download) => download.id === id);
+  if (action === "pause" && item?.transfer.resume.kind === "unsupported"
+    && !window.confirm("Este servidor no permite reanudar con seguridad. Si pausas, tendrás que reiniciar la descarga desde cero. ¿Pausar de todos modos?")) return;
   await manager.control(id, action);
 }
 

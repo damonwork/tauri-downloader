@@ -9,7 +9,7 @@ pub enum AppError {
     DownloadNotFound,
     #[error("Perfil de proxy no encontrado")]
     ProxyNotFound,
-    #[error("No se pudo acceder al almacenamiento local")]
+    #[error("No se pudo acceder al almacenamiento local: {0}")]
     Storage(#[source] std::io::Error),
     #[error("El estado guardado no tiene un formato válido")]
     InvalidStore(#[source] serde_json::Error),

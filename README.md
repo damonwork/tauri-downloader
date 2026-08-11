@@ -11,15 +11,17 @@ El repositorio contiene un MVP funcional:
 - [x] Alta mediante URL HTTP/HTTPS.
 - [x] Parser seguro de `curl` para GET/HEAD, headers, cookies, User-Agent, Referer y proxy.
 - [x] Cola nativa con límite global de descargas simultáneas.
-- [x] Descargas de 1 a 32 segmentos cuando el servidor admite rangos.
+- [x] Límite de 1 a 32 segmentos con degradación automática a un flujo si el servidor rechaza rangos o conexiones paralelas.
 - [x] Escritura incremental a disco con memoria acotada al bloque de red actual.
 - [x] Pausar, reanudar, reiniciar, reintentar manualmente y eliminar.
 - [x] Reanudación validada con `Range`, `Content-Range`, ETag o Last-Modified.
+- [x] Indicador de reanudación segura con motivo cuando el servidor no la permite.
 - [x] Reemplazo de enlaces vencidos sin perder segmentos parciales compatibles.
 - [x] Headers y cookies específicos por descarga.
 - [x] Perfiles proxy HTTP, HTTPS y SOCKS5.
 - [x] Carpeta raíz configurable y subcarpetas por categoría dentro de Descargas del sistema.
 - [x] Configuración individual por descarga: categoría, ruta, segmentos, proxy y credenciales.
+- [x] Límite de velocidad por descarga aplicado al tráfico agregado de todos sus segmentos.
 - [x] Persistencia local atómica de cola, ajustes y perfiles.
 - [x] Interfaz responsive con búsqueda, filtros, inspector y atajos.
 - [x] Vista web persistente para probar la UX sin ejecutar transferencias reales.
@@ -125,11 +127,14 @@ cargo test --locked --lib
 ## Seguridad
 
 - El texto `curl` se interpreta como datos y nunca se entrega a un shell.
+- Las solicitudes usan un User-Agent de navegador y `Accept-Encoding: identity`; un User-Agent pegado en `curl` tiene prioridad.
+- Los headers `Cookie` pegados desde el navegador se convierten al almacén de cookies y los headers de transporte se ignoran.
 - Se rechazan opciones que leen archivos locales o envían cuerpos/formularios.
 - Rust vuelve a validar URLs, nombres, headers, cookies, proxies y rutas.
 - Los eventos de progreso solo contienen la revisión del snapshot, nunca secretos.
 - Los errores de red no incluyen la URL solicitada.
 - Una respuesta reanudada debe ser `206` y coincidir con el rango exacto solicitado.
+- Pausar conserva los parciales; si el servidor no permite reanudar, la UI advierte que será necesario reiniciar.
 - Un parcial sin ETag o Last-Modified no se anexa: se exige reiniciar para evitar corrupción.
 - Las redirecciones se desactivan cuando la solicitud contiene cookies o headers personalizados.
 - Dos descargas no pueden reservar el mismo archivo de destino.

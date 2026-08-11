@@ -7,7 +7,12 @@ export function formatBytes(bytes: number | undefined, decimals = 1): string {
 }
 
 export function formatSpeed(bytes: number): string {
-  return bytes > 0 ? `${formatBytes(bytes)}/s` : "—";
+  if (bytes <= 0) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** unitIndex;
+  const decimals = Number.isInteger(value) || value >= 100 ? 0 : 1;
+  return `${value.toFixed(decimals)} ${units[unitIndex]}/s`;
 }
 
 export function formatEta(total: number | undefined, downloaded: number, speed: number): string {
