@@ -78,8 +78,6 @@ pub enum EngineError {
     ResumeRejected,
     #[error("El contenido del enlace cambió; actualiza el enlace o reinicia la descarga")]
     SourceChanged,
-    #[error("El servidor no ofrece ETag o Last-Modified; reinicia para evitar mezclar contenido")]
-    MissingValidator,
     #[error("El servidor devolvió un Content-Range inválido")]
     InvalidContentRange,
     #[error("Header inválido: {0}")]
@@ -96,7 +94,7 @@ impl EngineError {
     pub fn recoverable(&self) -> bool {
         matches!(
             self,
-            Self::Request | Self::HttpStatus(_) | Self::ResumeRejected | Self::SegmentTask
+            Self::Request | Self::HttpStatus(_) | Self::SegmentTask
         )
     }
 }
@@ -308,11 +306,15 @@ async fn run_single(
     }
 
     let validator = response_validator(response.headers());
+    ensure_same_source(resume_at, &input.item.transfer.validator, &validator)?;
+    let validator = if resume_at > 0 && matches!(&validator, SourceValidator::None) {
+        input.item.transfer.validator.clone()
+    } else {
+        validator
+    };
     let resume = resume_support(
         response.status() == StatusCode::PARTIAL_CONTENT || accepts_ranges(response.headers()),
-        &validator,
     );
-    ensure_same_source(resume_at, &input.item.transfer.validator, &validator)?;
     let size = response_size(response.headers(), resume_at);
     ensure_same_size(resume_at, &input.item.transfer.size, &size)?;
     let mut output = open_partial(&partial_path, resume_at > 0).await?;
@@ -638,14 +640,10 @@ fn accepts_ranges(headers: &reqwest::header::HeaderMap) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case("bytes"))
 }
 
-fn resume_support(accepts_ranges: bool, validator: &SourceValidator) -> ResumeSupport {
+fn resume_support(accepts_ranges: bool) -> ResumeSupport {
     if !accepts_ranges {
         ResumeSupport::Unsupported {
             reason: "El servidor no acepta solicitudes por rango".to_owned(),
-        }
-    } else if matches!(validator, SourceValidator::None) {
-        ResumeSupport::Unsupported {
-            reason: "El servidor no proporciona ETag o Last-Modified".to_owned(),
         }
     } else {
         ResumeSupport::Supported
@@ -753,13 +751,12 @@ fn ensure_same_source(
     previous: &SourceValidator,
     current: &SourceValidator,
 ) -> Result<(), EngineError> {
-    if downloaded > 0 {
-        if matches!(previous, SourceValidator::None) || matches!(current, SourceValidator::None) {
-            return Err(EngineError::MissingValidator);
-        }
-        if previous != current {
-            return Err(EngineError::SourceChanged);
-        }
+    if downloaded > 0
+        && !matches!(previous, SourceValidator::None)
+        && !matches!(current, SourceValidator::None)
+        && previous != current
+    {
+        return Err(EngineError::SourceChanged);
     }
     Ok(())
 }
@@ -1120,10 +1117,22 @@ mod tests {
     }
 
     #[test]
-    fn partial_without_a_durable_validator_is_rejected() {
+    fn partial_without_a_durable_validator_can_resume_by_exact_range() {
+        assert!(ensure_same_source(100, &SourceValidator::None, &SourceValidator::None).is_ok());
+    }
+
+    #[test]
+    fn conflicting_durable_validators_are_rejected() {
+        let previous = SourceValidator::Etag {
+            value: "\"old\"".to_owned(),
+        };
+        let current = SourceValidator::Etag {
+            value: "\"new\"".to_owned(),
+        };
+
         assert!(matches!(
-            ensure_same_source(100, &SourceValidator::None, &SourceValidator::None),
-            Err(EngineError::MissingValidator)
+            ensure_same_source(100, &previous, &current),
+            Err(EngineError::SourceChanged)
         ));
     }
 
@@ -1181,21 +1190,16 @@ mod tests {
     }
 
     #[test]
-    fn safe_resume_requires_ranges_and_a_durable_validator() {
-        let strong = SourceValidator::Etag {
-            value: "\"abc\"".to_owned(),
-        };
+    fn rejected_resume_requires_restart() {
+        assert!(!EngineError::ResumeRejected.recoverable());
+        assert!(EngineError::Request.recoverable());
+    }
 
+    #[test]
+    fn resume_support_follows_range_capability() {
+        assert!(matches!(resume_support(true), ResumeSupport::Supported));
         assert!(matches!(
-            resume_support(true, &strong),
-            ResumeSupport::Supported
-        ));
-        assert!(matches!(
-            resume_support(false, &strong),
-            ResumeSupport::Unsupported { .. }
-        ));
-        assert!(matches!(
-            resume_support(true, &SourceValidator::None),
+            resume_support(false),
             ResumeSupport::Unsupported { .. }
         ));
     }

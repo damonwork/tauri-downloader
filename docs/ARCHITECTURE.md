@@ -61,14 +61,14 @@ Un parcial solo puede anexarse cuando se cumplen estas condiciones:
 3. `Content-Range` comienza y termina exactamente donde se solicitó.
 4. ETag o Last-Modified coincide cuando el servidor proporciona un validador.
 5. La cantidad final de bytes coincide con el tamaño conocido.
-6. Existe un ETag o Last-Modified durable antes de anexar un parcial.
 
 Los cortes de red conservan los segmentos para reintentar. Solo un rechazo confirmado del
 protocolo de rangos activa la degradación a un flujo, evitando borrar progreso por un fallo transitorio.
 
-La UI solo marca una descarga como reanudable cuando el servidor confirma rangos y entrega un
-ETag fuerte o Last-Modified. Un ETag débil no se usa con If-Range. Si faltan esas garantías, se
-muestra el motivo y una descarga parcial solo puede reiniciarse desde cero.
+La UI marca una descarga como reanudable cuando el servidor confirma rangos. ETag fuerte o
+Last-Modified añaden validación de identidad y se muestran por separado; un ETag débil no se usa
+con If-Range. Sin validador todavía se exige un `206`, un `Content-Range` exacto y un tamaño
+compatible antes de anexar el parcial.
 
 ## Persistencia
 

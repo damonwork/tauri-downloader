@@ -13,7 +13,13 @@ const total = computed(() => props.item.transfer.size.kind === "known" ? props.i
 const speed = computed(() => props.item.state.kind === "downloading" ? props.item.state.speedBytes : 0);
 const resumeMeta = computed(() => {
   switch (props.item.transfer.resume.kind) {
-    case "supported": return { label: "Reanudable", className: "supported", title: "Admite rangos y validación segura" };
+    case "supported": return {
+      label: "Reanudable",
+      className: "supported",
+      title: props.item.transfer.validator.kind === "none"
+        ? "Admite rangos; el servidor no proporciona validador de identidad"
+        : "Admite rangos y validación de identidad",
+    };
     case "unsupported": return { label: "No reanudable", className: "unsupported", title: props.item.transfer.resume.reason };
     case "unknown": return { label: "Reanudación pendiente", className: "unknown", title: "Se comprobará al conectar" };
   }

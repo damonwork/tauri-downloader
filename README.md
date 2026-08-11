@@ -14,14 +14,14 @@ El repositorio contiene un MVP funcional:
 - [x] Límite de 1 a 32 segmentos con degradación automática a un flujo si el servidor rechaza rangos o conexiones paralelas.
 - [x] Escritura incremental a disco con memoria acotada al bloque de red actual.
 - [x] Pausar, reanudar, reiniciar, reintentar manualmente y eliminar.
-- [x] Reanudación validada con `Range`, `Content-Range`, ETag o Last-Modified.
-- [x] Indicador de reanudación segura con motivo cuando el servidor no la permite.
+- [x] Reanudación validada con `Range` y `Content-Range`, más ETag o Last-Modified cuando están disponibles.
+- [x] Indicador de reanudación con estado independiente del validador de identidad.
 - [x] Reemplazo de enlaces vencidos sin perder segmentos parciales compatibles.
 - [x] Headers y cookies específicos por descarga.
 - [x] Perfiles proxy HTTP, HTTPS y SOCKS5.
 - [x] Carpeta raíz configurable y subcarpetas por categoría dentro de Descargas del sistema.
 - [x] Configuración individual por descarga: categoría, ruta, segmentos, proxy y credenciales.
-- [x] Límite de velocidad por descarga aplicado al tráfico agregado de todos sus segmentos.
+- [x] Límite de velocidad por descarga con valor decimal y unidades KB/s, MB/s o GB/s, aplicado al tráfico agregado de todos sus segmentos.
 - [x] Persistencia local atómica de cola, ajustes y perfiles.
 - [x] Interfaz responsive con búsqueda, filtros, inspector y atajos.
 - [x] Vista web persistente para probar la UX sin ejecutar transferencias reales.
@@ -135,7 +135,7 @@ cargo test --locked --lib
 - Los errores de red no incluyen la URL solicitada.
 - Una respuesta reanudada debe ser `206` y coincidir con el rango exacto solicitado.
 - Pausar conserva los parciales; si el servidor no permite reanudar, la UI advierte que será necesario reiniciar.
-- Un parcial sin ETag o Last-Modified no se anexa: se exige reiniciar para evitar corrupción.
+- Sin ETag o Last-Modified, un parcial solo se anexa tras confirmar `206`, rango exacto y tamaño compatible.
 - Las redirecciones se desactivan cuando la solicitud contiene cookies o headers personalizados.
 - Dos descargas no pueden reservar el mismo archivo de destino.
 - Los archivos se descargan como parciales ocultos y se renombran al finalizar.

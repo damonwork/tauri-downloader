@@ -36,7 +36,7 @@ function demoSnapshot(): AppSnapshot {
       {
         id: createId(), fileName: "curso-arquitectura-modular.mkv", category: "video", state: { kind: "paused" },
         source: source("https://media.example.net/curso-arquitectura-modular.mkv"), destination: "Fluxor/Videos",
-        transfer: { downloadedBytes: 672_000_000, size: { kind: "known", totalBytes: 1_460_000_000 }, validator: { kind: "none" }, resume: { kind: "unsupported", reason: "El servidor no proporciona ETag o Last-Modified" } }, threads: 8, speedLimitBytes: 5 * 1024 ** 2,
+        transfer: { downloadedBytes: 672_000_000, size: { kind: "known", totalBytes: 1_460_000_000 }, validator: { kind: "none" }, resume: { kind: "supported" } }, threads: 8, speedLimitBytes: 5 * 1024 ** 2,
         createdAt: new Date(now - 7_200_000).toISOString(), updatedAt: new Date(now - 900_000).toISOString(),
       },
       {

@@ -22,7 +22,13 @@ const validatorLabel = computed(() => {
 });
 const resumeMeta = computed(() => {
   switch (props.item.transfer.resume.kind) {
-    case "supported": return { label: "Reanudable", detail: "Rangos y validador confirmados", className: "supported" };
+    case "supported": return {
+      label: "Reanudable",
+      detail: props.item.transfer.validator.kind === "none"
+        ? "Rangos confirmados; sin validador de identidad"
+        : "Rangos y validador confirmados",
+      className: "supported",
+    };
     case "unsupported": return { label: "No reanudable", detail: props.item.transfer.resume.reason, className: "unsupported" };
     case "unknown": return { label: "Por comprobar", detail: "Se determinará al conectar con el servidor", className: "unknown" };
   }

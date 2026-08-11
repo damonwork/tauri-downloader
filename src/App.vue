@@ -13,9 +13,18 @@ import DetailPanel from "@/components/DetailPanel.vue";
 import AddDownloadDialog from "@/components/AddDownloadDialog.vue";
 import SettingsDialog from "@/components/SettingsDialog.vue";
 import ProxyDialog from "@/components/ProxyDialog.vue";
+import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import AppIcon from "@/components/AppIcon.vue";
 
 type Filter = "all" | "active" | "queued" | "completed";
+type Confirmation = {
+  eyebrow: string;
+  title: string;
+  message: string;
+  confirmLabel: string;
+  tone: "warning" | "danger";
+  action: () => Promise<unknown>;
+};
 
 const manager = useDownloadManager(createDownloadGateway());
 const { snapshot, stats, loading, busy, lastError, capabilities } = manager;
@@ -26,6 +35,8 @@ const showAdd = ref(false);
 const showSettings = ref(false);
 const showProxies = ref(false);
 const noticeVisible = ref(capabilities.runtime === "web");
+const confirmation = ref<Confirmation>();
+const confirming = ref(false);
 
 const counts = computed(() => ({
   all: snapshot.value.downloads.length,
@@ -68,10 +79,29 @@ async function addDownload(input: CreateDownloadInput): Promise<void> {
 }
 
 async function control(id: string, action: DownloadAction): Promise<void> {
-  if (action === "remove" && !window.confirm("¿Eliminar esta descarga y sus archivos parciales?")) return;
   const item = snapshot.value.downloads.find((download) => download.id === id);
-  if (action === "pause" && item?.transfer.resume.kind === "unsupported"
-    && !window.confirm("Este servidor no permite reanudar con seguridad. Si pausas, tendrás que reiniciar la descarga desde cero. ¿Pausar de todos modos?")) return;
+  if (action === "remove") {
+    requestConfirmation({
+      eyebrow: "ELIMINAR TRANSFERENCIA",
+      title: "¿Eliminar esta descarga?",
+      message: `Se quitará ${item?.fileName ?? "esta descarga"} de la cola y también se borrarán sus archivos parciales. Esta acción no se puede deshacer.`,
+      confirmLabel: "Eliminar descarga",
+      tone: "danger",
+      action: () => manager.control(id, action),
+    });
+    return;
+  }
+  if (action === "pause" && item?.transfer.resume.kind === "unsupported") {
+    requestConfirmation({
+      eyebrow: "PROGRESO EN RIESGO",
+      title: "¿Pausar sin reanudación?",
+      message: "Este servidor no acepta solicitudes por rango. Si pausas ahora, tendrás que reiniciar la transferencia desde cero.",
+      confirmLabel: "Pausar de todos modos",
+      tone: "warning",
+      action: () => manager.control(id, action),
+    });
+    return;
+  }
   await manager.control(id, action);
 }
 
@@ -87,8 +117,36 @@ async function saveProxy(proxy: ProxyProfile): Promise<void> {
   await manager.saveProxy(proxy);
 }
 
-async function removeProxy(id: string): Promise<void> {
-  if (window.confirm("¿Eliminar este perfil de proxy?")) await manager.removeProxy(id);
+function removeProxy(id: string): void {
+  const proxy = snapshot.value.proxies.find((profile) => profile.id === id);
+  requestConfirmation({
+    eyebrow: "ELIMINAR PERFIL",
+    title: "¿Eliminar este proxy?",
+    message: `El perfil ${proxy?.name ?? "seleccionado"} desaparecerá de la configuración de red.`,
+    confirmLabel: "Eliminar perfil",
+    tone: "danger",
+    action: () => manager.removeProxy(id),
+  });
+}
+
+function requestConfirmation(request: Confirmation): void {
+  confirmation.value = request;
+}
+
+function cancelConfirmation(): void {
+  if (!confirming.value) confirmation.value = undefined;
+}
+
+async function confirmAction(): Promise<void> {
+  const request = confirmation.value;
+  if (!request || confirming.value) return;
+  confirming.value = true;
+  try {
+    await request.action();
+  } finally {
+    confirming.value = false;
+    confirmation.value = undefined;
+  }
 }
 
 function setFilter(value: string): void {
@@ -96,6 +154,7 @@ function setFilter(value: string): void {
 }
 
 function keyboardShortcuts(event: KeyboardEvent): void {
+  if (confirmation.value) return;
   if (!(event.metaKey || event.ctrlKey)) return;
   if (event.key.toLowerCase() === "n") {
     event.preventDefault();
@@ -170,6 +229,17 @@ onBeforeUnmount(() => window.removeEventListener("keydown", keyboardShortcuts));
       @save="saveProxy"
       @remove="removeProxy"
       @check="manager.checkProxy"
+    />
+    <ConfirmDialog
+      :open="confirmation !== undefined"
+      :eyebrow="confirmation?.eyebrow ?? ''"
+      :title="confirmation?.title ?? ''"
+      :message="confirmation?.message ?? ''"
+      :confirm-label="confirmation?.confirmLabel ?? ''"
+      :tone="confirmation?.tone ?? 'warning'"
+      :busy="confirming"
+      @cancel="cancelConfirmation"
+      @confirm="confirmAction"
     />
   </div>
 </template>
