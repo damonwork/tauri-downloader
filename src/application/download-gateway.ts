@@ -1,4 +1,10 @@
-import type { CreateDownloadInput, DownloadAction, DownloadItem, DownloadSource } from "@/domain/download";
+import type {
+  CreateDownloadInput,
+  DownloadAction,
+  DownloadItem,
+  DownloadProgressEvent,
+  DownloadSource,
+} from "@/domain/download";
 import type { AppSettings, AppSnapshot, ProxyProfile } from "@/domain/settings";
 
 export interface RuntimeCapabilities {
@@ -6,12 +12,13 @@ export interface RuntimeCapabilities {
 }
 
 export type SnapshotListener = (snapshot: AppSnapshot) => void;
+export type ProgressListener = (progress: DownloadProgressEvent) => void;
 export type Unlisten = () => void;
 
 export interface DownloadGateway {
   readonly capabilities: RuntimeCapabilities;
   snapshot(): Promise<AppSnapshot>;
-  subscribe(listener: SnapshotListener): Promise<Unlisten>;
+  subscribe(listener: SnapshotListener, progressListener: ProgressListener): Promise<Unlisten>;
   add(input: CreateDownloadInput): Promise<DownloadItem>;
   control(id: string, action: DownloadAction): Promise<void>;
   replaceSource(id: string, source: DownloadSource): Promise<void>;

@@ -66,7 +66,7 @@ const navigation = [
 .brand-mark span { display: block; width: 7px; background: var(--accent); border-radius: 1px; box-shadow: 0 0 14px rgba(194,255,91,.22); }
 .brand-mark span:nth-child(1) { height: 14px; opacity: .45; }.brand-mark span:nth-child(2) { height: 23px; opacity: .72; }.brand-mark span:nth-child(3) { height: 31px; }
 .brand strong { display: block; letter-spacing: .16em; font-size: 14px; }.brand small { display: block; margin-top: 2px; color: var(--muted); font: 8px/1.2 var(--mono); letter-spacing: .16em; }
-.primary-nav, .nav-section { display: grid; gap: 5px; }.nav-section { margin-top: 28px; }.nav-section > p { margin: 0 10px 8px; color: #66706c; font: 10px var(--mono); letter-spacing: .14em; }
+.primary-nav, .nav-section { display: grid; gap: 5px; }.nav-section { margin-top: 28px; }.nav-section > p { margin: 0 10px 8px; color: #7f8a84; font: 10px var(--mono); letter-spacing: .14em; }
 .nav-item { width: 100%; min-height: 42px; border: 0; border-radius: 7px; background: transparent; color: #89938f; display: grid; grid-template-columns: 24px 1fr auto; align-items: center; gap: 8px; padding: 0 11px; font-size: 13px; text-align: left; cursor: pointer; transition: .18s ease; }
 .nav-item:hover { color: var(--text); background: rgba(255,255,255,.035); }.nav-item.active { color: var(--text); background: #171e1b; box-shadow: inset 2px 0 var(--accent); }.nav-item.active :deep(.app-icon) { color: var(--accent); }
 .nav-item b { min-width: 21px; padding: 3px 5px; border-radius: 4px; background: #202824; color: #aeb7b3; font: 10px var(--mono); text-align: center; }

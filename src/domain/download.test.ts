@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { categoryForFile, deriveStats, fileNameFromUrl, progressOf, safeFileName, type DownloadItem } from "./download";
+import {
+  categoryForFile,
+  applyDownloadProgress,
+  deriveStats,
+  EMPTY_TRANSFER_TELEMETRY,
+  fileNameFromUrl,
+  progressOf,
+  safeFileName,
+  segmentProgressOf,
+  type DownloadItem,
+} from "./download";
 import { formatSpeed, redactUrl } from "./format";
 
 const baseItem: DownloadItem = {
@@ -10,6 +20,7 @@ const baseItem: DownloadItem = {
   source: { url: "https://example.com/file.zip", headers: [], cookies: [], proxy: { kind: "direct" } },
   destination: "Fluxor",
   transfer: { downloadedBytes: 25, size: { kind: "known", totalBytes: 100 }, validator: { kind: "none" }, resume: { kind: "unknown" } },
+  telemetry: structuredClone(EMPTY_TRANSFER_TELEMETRY),
   threads: 8,
   speedLimitBytes: 0,
   createdAt: "2026-08-11T00:00:00Z",
@@ -31,6 +42,39 @@ describe("download domain", () => {
     ];
 
     expect(deriveStats(items)).toEqual({ active: 1, queued: 1, completed: 1, failed: 1, speedBytes: 2_000 });
+  });
+
+  it("calcula cada segmento desde su propio rango", () => {
+    expect(segmentProgressOf({
+      index: 1,
+      startByte: 100,
+      endByte: 199,
+      downloadedBytes: 42,
+      speedBytes: 10,
+      state: "downloading",
+      lastActivityAt: null,
+      error: null,
+    })).toBe(42);
+  });
+
+  it("aplica una muestra incremental sin reemplazar otras descargas", () => {
+    const other = { ...baseItem, id: "other" };
+    const telemetry = {
+      ...structuredClone(EMPTY_TRANSFER_TELEMETRY),
+      phase: "connecting" as const,
+    };
+    const items = applyDownloadProgress([baseItem, other], {
+      revision: 3,
+      downloadId: baseItem.id,
+      state: { kind: "downloading", speedBytes: 2_048 },
+      transfer: { ...baseItem.transfer, downloadedBytes: 40 },
+      telemetry,
+      updatedAt: "2026-08-11T00:01:00Z",
+    });
+
+    expect(items[0].telemetry.phase).toBe("connecting");
+    expect(items[0].transfer.downloadedBytes).toBe(40);
+    expect(items[1]).toBe(other);
   });
 
   it("clasifica y sanea nombres de archivo", () => {

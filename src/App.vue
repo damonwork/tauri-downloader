@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { CreateDownloadInput, DownloadAction, DownloadItem, DownloadSource } from "@/domain/download";
 import type { AppSettings, ProxyProfile } from "@/domain/settings";
-import { hostOf } from "@/domain/format";
+import { formatBytes, hostOf } from "@/domain/format";
 import { createDownloadGateway } from "@/infrastructure/runtime";
 import { useDownloadManager } from "@/application/use-download-manager";
 import SideRail from "@/components/SideRail.vue";
@@ -98,6 +98,17 @@ async function control(id: string, action: DownloadAction): Promise<void> {
       message: "Este servidor no acepta solicitudes por rango. Si pausas ahora, tendrás que reiniciar la transferencia desde cero.",
       confirmLabel: "Pausar de todos modos",
       tone: "warning",
+      action: () => manager.control(id, action),
+    });
+    return;
+  }
+  if (action === "restart" && item && item.transfer.downloadedBytes > 0) {
+    requestConfirmation({
+      eyebrow: "REINICIAR DESDE CERO",
+      title: "¿Descartar el progreso descargado?",
+      message: `Se eliminarán ${formatBytes(item.transfer.downloadedBytes)} de datos parciales de ${item.fileName}. Esta acción no se puede deshacer.`,
+      confirmLabel: "Reiniciar desde cero",
+      tone: "danger",
       action: () => manager.control(id, action),
     });
     return;

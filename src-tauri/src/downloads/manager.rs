@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     fs,
     io::AsyncWriteExt,
-    sync::{mpsc, Mutex, Notify, RwLock},
+    sync::{watch, Mutex, Notify, RwLock},
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -21,8 +21,9 @@ use super::{
     error::AppError,
     model::{
         AppSettings, AppSnapshot, CreateDownloadInput, DownloadAction, DownloadCategory,
-        DownloadItem, DownloadSource, DownloadState, ProxyHealth, ProxyProfile, ProxySelection,
-        ResumeSupport, RevisionEvent, SourceValidator, TransferProgress, TransferSize,
+        DownloadItem, DownloadProgressEvent, DownloadSource, DownloadState, ProxyHealth,
+        ProxyProfile, ProxySelection, ResumeSupport, RevisionEvent, SegmentState, SourceValidator,
+        TransferPhase, TransferProgress, TransferSize, TransferTelemetry,
     },
 };
 
@@ -31,8 +32,10 @@ const MAX_FILE_NAME_UTF16_UNITS: usize = 200;
 const MAX_THREADS_PER_DOWNLOAD: u8 = 32;
 const MAX_CONCURRENT_DOWNLOADS: u8 = 12;
 const MAX_SPEED_LIMIT_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+const PROGRESS_PERSIST_INTERVAL: Duration = Duration::from_secs(3);
 
 struct TaskControl {
+    generation: String,
     cancellation: CancellationToken,
     join: JoinHandle<()>,
 }
@@ -46,8 +49,11 @@ pub struct DownloadManager {
     app: AppHandle,
     state: RwLock<AppSnapshot>,
     tasks: Mutex<HashMap<String, TaskControl>>,
+    starting: Mutex<HashSet<String>>,
     stopping: Mutex<HashSet<String>>,
+    operation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     persistence: Mutex<()>,
+    progress_persisted_at: Mutex<HashMap<String, Instant>>,
     scheduler: Notify,
     store_path: PathBuf,
 }
@@ -66,14 +72,18 @@ impl DownloadManager {
             if matches!(&item.state, DownloadState::Downloading { .. }) {
                 item.state = DownloadState::Queued;
             }
+            reset_live_telemetry(item);
         }
 
         let manager = Arc::new(Self {
             app,
             state: RwLock::new(snapshot),
             tasks: Mutex::new(HashMap::new()),
+            starting: Mutex::new(HashSet::new()),
             stopping: Mutex::new(HashSet::new()),
+            operation_locks: Mutex::new(HashMap::new()),
             persistence: Mutex::new(()),
+            progress_persisted_at: Mutex::new(HashMap::new()),
             scheduler: Notify::new(),
             store_path,
         });
@@ -148,6 +158,7 @@ impl DownloadManager {
                 validator: SourceValidator::None,
                 resume: ResumeSupport::Unknown,
             },
+            telemetry: TransferTelemetry::default(),
             threads: input.threads,
             speed_limit_bytes: input.speed_limit_bytes,
             created_at: now,
@@ -172,6 +183,8 @@ impl DownloadManager {
     }
 
     pub async fn control(&self, id: &str, action: DownloadAction) -> Result<(), AppError> {
+        let operation = self.operation_lock(id).await;
+        let _guard = operation.lock().await;
         match action {
             DownloadAction::Pause => self.pause(id).await,
             DownloadAction::Resume | DownloadAction::Retry => self.queue(id).await,
@@ -181,15 +194,31 @@ impl DownloadManager {
     }
 
     pub async fn replace_source(&self, id: &str, source: DownloadSource) -> Result<(), AppError> {
+        let operation = self.operation_lock(id).await;
+        let _guard = operation.lock().await;
         validate_source(&source)?;
         self.set_paused(id).await?;
         self.stop_task(id).await;
+        let completed = {
+            let state = self.state.read().await;
+            matches!(
+                &find_download(&state, id)?.state,
+                DownloadState::Completed { .. }
+            )
+        };
+        if completed {
+            return Err(AppError::Validation(
+                "La descarga ya se completó; crea una nueva descarga para cambiar el origen"
+                    .to_owned(),
+            ));
+        }
         self.reconcile_partial_progress(id).await?;
         {
             let mut state = self.state.write().await;
             let item = find_download_mut(&mut state, id)?;
             item.source = source;
             item.transfer.resume = ResumeSupport::Unknown;
+            item.telemetry = TransferTelemetry::default();
             item.state = DownloadState::Queued;
             item.updated_at = Utc::now();
             state.revision += 1;
@@ -354,6 +383,7 @@ impl DownloadManager {
         let item = find_download_mut(&mut state, id)?;
         if !matches!(&item.state, DownloadState::Completed { .. }) {
             item.state = DownloadState::Paused;
+            pause_telemetry(item);
             item.updated_at = Utc::now();
             state.revision += 1;
         }
@@ -364,6 +394,9 @@ impl DownloadManager {
         let (directory, file_name, threads, recorded) = {
             let state = self.state.read().await;
             let item = find_download(&state, id)?;
+            if matches!(&item.state, DownloadState::Completed { .. }) {
+                return Ok(());
+            }
             (
                 self.destination_dir(item)?,
                 item.file_name.clone(),
@@ -373,17 +406,48 @@ impl DownloadManager {
         };
         let single = stored_file_len(&directory.join(format!(".{file_name}.fluxor.part"))).await?;
         let mut segmented = 0_u64;
+        let mut segment_lengths = Vec::with_capacity(usize::from(threads));
         for index in 0..usize::from(threads) {
-            segmented = segmented.saturating_add(
+            let length =
                 stored_file_len(&directory.join(format!(".{file_name}.fluxor.part.{index}")))
-                    .await?,
-            );
+                    .await?;
+            segmented = segmented.saturating_add(length);
+            segment_lengths.push(length);
         }
         let downloaded = single.max(segmented);
-        if downloaded != recorded {
+        if downloaded != recorded || single > 0 || segmented > 0 {
             let mut state = self.state.write().await;
             let item = find_download_mut(&mut state, id)?;
+            if matches!(&item.state, DownloadState::Completed { .. }) {
+                return Ok(());
+            }
+            let failed = matches!(&item.state, DownloadState::Failed { .. });
             item.transfer.downloaded_bytes = downloaded;
+            item.telemetry.phase = TransferPhase::Idle;
+            for segment in &mut item.telemetry.segments {
+                let stored = if single > 0 {
+                    single
+                } else {
+                    segment_lengths
+                        .get(usize::from(segment.index))
+                        .copied()
+                        .unwrap_or(segment.downloaded_bytes)
+                };
+                let expected = segment
+                    .end_byte
+                    .map(|end| end.saturating_sub(segment.start_byte) + 1);
+                segment.downloaded_bytes = expected.map_or(stored, |total| stored.min(total));
+                segment.speed_bytes = 0;
+                segment.state = if expected == Some(segment.downloaded_bytes) {
+                    SegmentState::Completed
+                } else if failed && matches!(segment.state, SegmentState::Failed) {
+                    SegmentState::Failed
+                } else if failed {
+                    SegmentState::Stopped
+                } else {
+                    SegmentState::Paused
+                };
+            }
             item.updated_at = Utc::now();
             state.revision += 1;
         }
@@ -403,6 +467,7 @@ impl DownloadManager {
                 return Ok(());
             }
             item.state = DownloadState::Queued;
+            reset_live_telemetry(item);
             item.updated_at = Utc::now();
             state.revision += 1;
         }
@@ -414,6 +479,18 @@ impl DownloadManager {
     async fn restart(&self, id: &str) -> Result<(), AppError> {
         self.set_paused(id).await?;
         self.stop_task(id).await;
+        let completed = {
+            let state = self.state.read().await;
+            matches!(
+                &find_download(&state, id)?.state,
+                DownloadState::Completed { .. }
+            )
+        };
+        if completed {
+            return Err(AppError::Validation(
+                "La descarga terminó mientras se finalizaba el archivo".to_owned(),
+            ));
+        }
         let (directory, file_name) = {
             let state = self.state.read().await;
             let item = find_download(&state, id)?;
@@ -429,6 +506,7 @@ impl DownloadManager {
                 validator: SourceValidator::None,
                 resume: ResumeSupport::Unknown,
             };
+            item.telemetry = TransferTelemetry::default();
             item.state = DownloadState::Queued;
             item.updated_at = Utc::now();
             state.revision += 1;
@@ -466,46 +544,73 @@ impl DownloadManager {
     }
 
     async fn next_job(&self) -> Result<Option<(DownloadItem, PathBuf, ResolvedProxy)>, AppError> {
-        let active = self.tasks.lock().await.len() + self.stopping.lock().await.len();
+        let tasks = self.tasks.lock().await;
+        let stopping = self.stopping.lock().await;
+        let mut starting = self.starting.lock().await;
+        let active = tasks.len() + stopping.len() + starting.len();
+        let blocked = tasks
+            .keys()
+            .chain(stopping.iter())
+            .chain(starting.iter())
+            .cloned()
+            .collect::<HashSet<_>>();
         let state = self.state.read().await;
         if active >= usize::from(state.settings.max_concurrent) {
             return Ok(None);
         }
-        let Some(index) = state
-            .downloads
-            .iter()
-            .position(|item| matches!(&item.state, DownloadState::Queued))
-        else {
+        let Some(index) = state.downloads.iter().position(|item| {
+            matches!(&item.state, DownloadState::Queued) && !blocked.contains(&item.id)
+        }) else {
             return Ok(None);
         };
 
         let item = state.downloads[index].clone();
         let proxy = resolve_proxy(&state, &item.source.proxy)?;
         let destination = self.destination_dir(&item)?;
+        starting.insert(item.id.clone());
         drop(state);
-        {
+        drop(starting);
+        drop(stopping);
+        drop(tasks);
+        let marked_downloading = {
             let mut state = self.state.write().await;
-            let current = find_download_mut(&mut state, &item.id)?;
-            if !matches!(&current.state, DownloadState::Queued) {
-                return Ok(None);
+            if let Ok(current) = find_download_mut(&mut state, &item.id) {
+                if !matches!(&current.state, DownloadState::Queued) {
+                    false
+                } else {
+                    current.state = DownloadState::Downloading { speed_bytes: 0 };
+                    current.telemetry.phase = TransferPhase::Preparing;
+                    current.updated_at = Utc::now();
+                    state.revision += 1;
+                    true
+                }
+            } else {
+                false
             }
-            current.state = DownloadState::Downloading { speed_bytes: 0 };
-            current.updated_at = Utc::now();
-            state.revision += 1;
+        };
+        if !marked_downloading {
+            self.starting.lock().await.remove(&item.id);
+            return Ok(None);
         }
         if let Err(error) = self.commit().await {
             let revision = {
                 let mut state = self.state.write().await;
-                let current = find_download_mut(&mut state, &item.id)?;
-                current.state = DownloadState::Failed {
-                    message: error.to_string(),
-                    recoverable: false,
-                };
-                current.updated_at = Utc::now();
-                state.revision += 1;
-                state.revision
+                if let Ok(current) = find_download_mut(&mut state, &item.id) {
+                    current.state = DownloadState::Failed {
+                        message: error.to_string(),
+                        recoverable: false,
+                    };
+                    current.updated_at = Utc::now();
+                    state.revision += 1;
+                    Some(state.revision)
+                } else {
+                    None
+                }
             };
-            self.emit_revision(revision);
+            self.starting.lock().await.remove(&item.id);
+            if let Some(revision) = revision {
+                self.emit_revision(revision);
+            }
             self.scheduler.notify_one();
             return Ok(None);
         }
@@ -542,15 +647,14 @@ impl DownloadManager {
         proxy: ResolvedProxy,
     ) {
         let id = item.id.clone();
-        if self.tasks.lock().await.contains_key(&id) {
-            return;
-        }
         let cancellation = CancellationToken::new();
         let gate = Arc::new(Notify::new());
+        let generation = Uuid::new_v4().to_string();
         let manager = Arc::clone(self);
         let task_cancellation = cancellation.clone();
         let task_gate = Arc::clone(&gate);
         let task_id = id.clone();
+        let task_generation = generation.clone();
         let join = tauri::async_runtime::spawn(async move {
             task_gate.notified().await;
             manager
@@ -564,26 +668,69 @@ impl DownloadManager {
                     task_cancellation,
                 )
                 .await;
-            manager.tasks.lock().await.remove(&task_id);
+            let mut tasks = manager.tasks.lock().await;
+            if tasks
+                .get(&task_id)
+                .is_some_and(|control| control.generation == task_generation)
+            {
+                tasks.remove(&task_id);
+            }
+            drop(tasks);
             manager.scheduler.notify_one();
         });
-        let replaced = self
-            .tasks
-            .lock()
-            .await
-            .insert(id, TaskControl { cancellation, join });
+        let mut tasks = self.tasks.lock().await;
+        let stopping = self.stopping.lock().await;
+        let mut starting = self.starting.lock().await;
+        let state = self.state.read().await;
+        let can_start = starting.contains(&id)
+            && !tasks.contains_key(&id)
+            && !stopping.contains(&id)
+            && state.downloads.iter().any(|download| {
+                download.id == id && matches!(&download.state, DownloadState::Downloading { .. })
+            });
+        drop(state);
+        if !can_start {
+            starting.remove(&id);
+            cancellation.cancel();
+            gate.notify_one();
+            drop(starting);
+            drop(stopping);
+            drop(tasks);
+            let _ = join.await;
+            self.scheduler.notify_one();
+            return;
+        }
+        starting.remove(&id);
+        let replaced = tasks.insert(
+            id,
+            TaskControl {
+                generation,
+                cancellation,
+                join,
+            },
+        );
         debug_assert!(replaced.is_none());
+        drop(starting);
+        drop(stopping);
+        drop(tasks);
         gate.notify_one();
     }
 
     async fn run_job(&self, id: String, input: EngineInput, cancellation: CancellationToken) {
-        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let (sender, mut receiver) = watch::channel(None);
+        let progress_guard = sender.clone();
         let transfer = DownloadEngine::run(input, cancellation, sender);
         tokio::pin!(transfer);
+        let mut progress_open = true;
 
-        let result: Result<_, JobFailure> = loop {
+        let mut result: Result<_, JobFailure> = loop {
             tokio::select! {
-                progress = receiver.recv() => {
+                changed = receiver.changed(), if progress_open => {
+                    if changed.is_err() {
+                        progress_open = false;
+                        continue;
+                    }
+                    let progress = receiver.borrow_and_update().clone();
                     if let Some(progress) = progress {
                         if let Err(error) = self.update_progress(&id, progress).await {
                             break Err(JobFailure::Persistence(error));
@@ -594,6 +741,18 @@ impl DownloadManager {
             }
         };
 
+        if receiver.has_changed().unwrap_or(false) {
+            let final_progress = { receiver.borrow_and_update().clone() };
+            if let Some(progress) = final_progress {
+                if let Err(error) = self.update_progress(&id, progress).await {
+                    result = Err(JobFailure::Persistence(error));
+                }
+            }
+        }
+        drop(progress_guard);
+
+        let mut cancelled = false;
+        let mut failed = false;
         match result {
             Ok(output) => {
                 let mut state = self.state.write().await;
@@ -602,6 +761,7 @@ impl DownloadManager {
                     item.transfer.size = output.size;
                     item.transfer.validator = output.validator;
                     item.transfer.resume = output.resume;
+                    item.telemetry = output.telemetry;
                     item.state = DownloadState::Completed {
                         completed_at: Utc::now(),
                     };
@@ -609,8 +769,9 @@ impl DownloadManager {
                     state.revision += 1;
                 }
             }
-            Err(JobFailure::Engine(EngineError::Cancelled)) => return,
+            Err(JobFailure::Engine(EngineError::Cancelled)) => cancelled = true,
             Err(failure) => {
+                failed = true;
                 let (message, recoverable) = match failure {
                     JobFailure::Engine(error) => (error.to_string(), error.recoverable()),
                     JobFailure::Persistence(error) => (error.to_string(), false),
@@ -622,11 +783,30 @@ impl DownloadManager {
                             message,
                             recoverable,
                         };
+                        item.telemetry.phase = TransferPhase::Idle;
+                        for segment in &mut item.telemetry.segments {
+                            segment.speed_bytes = 0;
+                            if matches!(
+                                segment.state,
+                                SegmentState::Pending
+                                    | SegmentState::Connecting
+                                    | SegmentState::Downloading
+                            ) {
+                                segment.state = SegmentState::Stopped;
+                            }
+                        }
                         item.updated_at = Utc::now();
                         state.revision += 1;
                     }
                 }
             }
+        }
+        self.progress_persisted_at.lock().await.remove(&id);
+        if cancelled {
+            return;
+        }
+        if failed {
+            let _ = self.reconcile_partial_progress(&id).await;
         }
         if let Err(error) = self.commit().await {
             let revision = {
@@ -646,7 +826,7 @@ impl DownloadManager {
     }
 
     async fn update_progress(&self, id: &str, progress: EngineProgress) -> Result<(), AppError> {
-        let (revision, identity_changed) = {
+        let (event, identity_changed) = {
             let mut state = self.state.write().await;
             let Ok(item) = find_download_mut(&mut state, id) else {
                 return Ok(());
@@ -662,24 +842,62 @@ impl DownloadManager {
             item.transfer.size = progress.size;
             item.transfer.validator = progress.validator;
             item.transfer.resume = progress.resume;
+            item.telemetry = progress.telemetry;
             item.state = DownloadState::Downloading {
                 speed_bytes: progress.speed_bytes,
             };
             item.updated_at = Utc::now();
+            let event_data = (
+                item.id.clone(),
+                item.state.clone(),
+                item.transfer.clone(),
+                item.telemetry.clone(),
+                item.updated_at,
+            );
             state.revision += 1;
-            (state.revision, identity_changed)
+            let (download_id, item_state, transfer, telemetry, updated_at) = event_data;
+            (
+                DownloadProgressEvent {
+                    revision: state.revision,
+                    download_id,
+                    state: item_state,
+                    transfer,
+                    telemetry,
+                    updated_at,
+                },
+                identity_changed,
+            )
         };
-        self.emit_revision(revision);
-        if identity_changed || revision % 4 == 0 {
+        self.emit_progress(event);
+        if self.should_persist_progress(id, identity_changed).await {
             self.persist().await?;
         }
         Ok(())
     }
 
+    async fn operation_lock(&self, id: &str) -> Arc<Mutex<()>> {
+        let mut operations = self.operation_locks.lock().await;
+        Arc::clone(
+            operations
+                .entry(id.to_owned())
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
+    }
+
     async fn stop_task(&self, id: &str) {
-        let control = { self.tasks.lock().await.remove(id) };
+        let control = {
+            let mut tasks = self.tasks.lock().await;
+            let mut stopping = self.stopping.lock().await;
+            let mut starting = self.starting.lock().await;
+            if !tasks.contains_key(id) {
+                starting.remove(id);
+                return;
+            }
+            starting.remove(id);
+            stopping.insert(id.to_owned());
+            tasks.remove(id)
+        };
         if let Some(control) = control {
-            self.stopping.lock().await.insert(id.to_owned());
             control.cancellation.cancel();
             let _ = control.join.await;
             self.stopping.lock().await.remove(id);
@@ -814,6 +1032,23 @@ impl DownloadManager {
         let _ = self
             .app
             .emit("downloads://changed", RevisionEvent { revision });
+    }
+
+    fn emit_progress(&self, event: DownloadProgressEvent) {
+        let _ = self.app.emit("downloads://progress", event);
+    }
+
+    async fn should_persist_progress(&self, id: &str, force: bool) -> bool {
+        let now = Instant::now();
+        let mut persisted = self.progress_persisted_at.lock().await;
+        let due = force
+            || persisted
+                .get(id)
+                .is_none_or(|last| now.duration_since(*last) >= PROGRESS_PERSIST_INTERVAL);
+        if due {
+            persisted.insert(id.to_owned(), now);
+        }
+        due
     }
 }
 
@@ -1242,6 +1477,37 @@ async fn stored_file_len(path: &Path) -> Result<u64, AppError> {
         Ok(metadata) => Ok(metadata.len()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
         Err(error) => Err(error.into()),
+    }
+}
+
+fn reset_live_telemetry(item: &mut DownloadItem) {
+    item.telemetry.phase = TransferPhase::Idle;
+    let resting_state = if matches!(&item.state, DownloadState::Paused) {
+        SegmentState::Paused
+    } else {
+        SegmentState::Pending
+    };
+    let preserve_failure = matches!(&item.state, DownloadState::Failed { .. });
+    for segment in &mut item.telemetry.segments {
+        segment.speed_bytes = 0;
+        if !(matches!(segment.state, SegmentState::Completed)
+            || preserve_failure && matches!(segment.state, SegmentState::Failed))
+        {
+            segment.state = resting_state.clone();
+        }
+        if !preserve_failure {
+            segment.error = None;
+        }
+    }
+}
+
+fn pause_telemetry(item: &mut DownloadItem) {
+    item.telemetry.phase = TransferPhase::Idle;
+    for segment in &mut item.telemetry.segments {
+        segment.speed_bytes = 0;
+        if !matches!(segment.state, SegmentState::Completed) {
+            segment.state = SegmentState::Paused;
+        }
     }
 }
 

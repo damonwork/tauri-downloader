@@ -2,11 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
   DownloadGateway,
+  ProgressListener,
   RuntimeCapabilities,
   SnapshotListener,
   Unlisten,
 } from "@/application/download-gateway";
-import type { CreateDownloadInput, DownloadAction, DownloadItem, DownloadSource } from "@/domain/download";
+import type {
+  CreateDownloadInput,
+  DownloadAction,
+  DownloadItem,
+  DownloadProgressEvent,
+  DownloadSource,
+} from "@/domain/download";
 import type { AppSettings, AppSnapshot, ProxyProfile } from "@/domain/settings";
 
 export class TauriDownloadGateway implements DownloadGateway {
@@ -18,7 +25,7 @@ export class TauriDownloadGateway implements DownloadGateway {
     return invoke("get_snapshot");
   }
 
-  async subscribe(listener: SnapshotListener): Promise<Unlisten> {
+  async subscribe(listener: SnapshotListener, progressListener: ProgressListener): Promise<Unlisten> {
     let active = true;
     let refreshing = false;
     let pending = false;
@@ -43,12 +50,18 @@ export class TauriDownloadGateway implements DownloadGateway {
         refreshing = false;
       }
     };
-    const stop = await listen("downloads://changed", () => {
-      void refresh();
-    });
+    const [stopChanged, stopProgress] = await Promise.all([
+      listen("downloads://changed", () => {
+        void refresh();
+      }),
+      listen<DownloadProgressEvent>("downloads://progress", ({ payload }) => {
+        if (active) progressListener(payload);
+      }),
+    ]);
     return () => {
       active = false;
-      stop();
+      stopChanged();
+      stopProgress();
     };
   }
 

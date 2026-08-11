@@ -1,12 +1,13 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
+        atomic::{AtomicI64, AtomicU64, AtomicU8, Ordering},
+        Arc, Mutex as StdMutex,
     },
     time::{Duration, Instant},
 };
 
+use chrono::{DateTime, Utc};
 use reqwest::{
     header::{
         HeaderMap, HeaderName, HeaderValue, ACCEPT_ENCODING, ACCEPT_RANGES, CONTENT_DISPOSITION,
@@ -19,13 +20,16 @@ use thiserror::Error;
 use tokio::{
     fs::{self, File, OpenOptions},
     io::{AsyncWriteExt, BufWriter},
-    sync::{mpsc::UnboundedSender, Mutex},
+    sync::{watch, Mutex},
     task::JoinSet,
     time,
 };
 use tokio_util::sync::CancellationToken;
 
-use super::model::{DownloadItem, DownloadSource, ResumeSupport, SourceValidator, TransferSize};
+use super::model::{
+    DownloadItem, DownloadSource, ResumeSupport, SegmentProgress, SegmentState, SourceValidator,
+    TransferMode, TransferPhase, TransferSize, TransferTelemetry,
+};
 
 const MAX_REDIRECTS: usize = 10;
 const MIN_SEGMENT_SIZE: u64 = 2 * 1024 * 1024;
@@ -54,6 +58,7 @@ pub struct EngineProgress {
     pub validator: SourceValidator,
     pub resume: ResumeSupport,
     pub speed_bytes: u64,
+    pub telemetry: TransferTelemetry,
 }
 
 #[derive(Clone, Debug)]
@@ -62,13 +67,14 @@ pub struct EngineOutput {
     pub size: TransferSize,
     pub validator: SourceValidator,
     pub resume: ResumeSupport,
+    pub telemetry: TransferTelemetry,
 }
 
 #[derive(Debug, Error)]
 pub enum EngineError {
     #[error("Transferencia cancelada")]
     Cancelled,
-    #[error("El servidor rechazó la solicitud")]
+    #[error("No se pudo completar la comunicación con el servidor")]
     Request,
     #[error("El servidor devolvió un estado HTTP inesperado: {0}")]
     HttpStatus(u16),
@@ -122,8 +128,20 @@ impl DownloadEngine {
     pub async fn run(
         input: EngineInput,
         cancellation: CancellationToken,
-        progress: UnboundedSender<EngineProgress>,
+        progress: watch::Sender<Option<EngineProgress>>,
     ) -> Result<EngineOutput, EngineError> {
+        send_progress(
+            &progress,
+            input.item.transfer.downloaded_bytes,
+            &input.item.transfer.size,
+            &input.item.transfer.validator,
+            &input.item.transfer.resume,
+            0,
+            TransferTelemetry {
+                phase: TransferPhase::Preparing,
+                ..TransferTelemetry::default()
+            },
+        );
         fs::create_dir_all(&input.destination_dir)
             .await
             .map_err(EngineError::File)?;
@@ -132,7 +150,14 @@ impl DownloadEngine {
         let client = build_client(&input.proxy, &input.item.source)?;
         let single_partial = partial_path(&input.destination_dir, &input.item.file_name);
         if file_len(&single_partial).await? > 0 {
-            return run_single(input, client, cancellation, progress).await;
+            return run_single(
+                input,
+                client,
+                cancellation,
+                progress,
+                Some("Se encontró un parcial creado como flujo único".to_owned()),
+            )
+            .await;
         }
 
         let has_segment_partials = has_segment_partials(
@@ -141,9 +166,21 @@ impl DownloadEngine {
             input.item.threads,
         )
         .await?;
+        send_progress(
+            &progress,
+            input.item.transfer.downloaded_bytes,
+            &input.item.transfer.size,
+            &input.item.transfer.validator,
+            &input.item.transfer.resume,
+            0,
+            TransferTelemetry {
+                phase: TransferPhase::Probing,
+                ..TransferTelemetry::default()
+            },
+        );
         let probe = probe_source(&client, &input.item.source, &cancellation).await;
 
-        if let Some(probe) = probe {
+        if let Some(probe) = probe.clone() {
             let can_segment = probe.accepts_ranges
                 && input.item.threads > 1
                 && !matches!(&probe.validator, SourceValidator::None)
@@ -171,7 +208,17 @@ impl DownloadEngine {
                             input.item.threads,
                         )
                         .await?;
-                        return run_single(input, client, cancellation, progress).await;
+                        return run_single(
+                            input,
+                            client,
+                            cancellation,
+                            progress,
+                            Some(
+                                "El servidor rechazó la transferencia segmentada; se usa un flujo"
+                                    .to_owned(),
+                            ),
+                        )
+                        .await;
                     }
                     Err(error) => return Err(error),
                 }
@@ -182,7 +229,8 @@ impl DownloadEngine {
             return Err(EngineError::ResumeRejected);
         }
 
-        run_single(input, client, cancellation, progress).await
+        let reason = single_stream_reason(probe.as_ref(), input.item.threads);
+        run_single(input, client, cancellation, progress, Some(reason)).await
     }
 }
 
@@ -191,6 +239,79 @@ struct ProbeResult {
     size: TransferSize,
     validator: SourceValidator,
     accepts_ranges: bool,
+}
+
+const SEGMENT_PENDING: u8 = 0;
+const SEGMENT_CONNECTING: u8 = 1;
+const SEGMENT_DOWNLOADING: u8 = 2;
+const SEGMENT_COMPLETED: u8 = 3;
+const SEGMENT_FAILED: u8 = 4;
+const SEGMENT_STOPPED: u8 = 5;
+
+struct SegmentRuntime {
+    index: u8,
+    start_byte: u64,
+    end_byte: u64,
+    downloaded_bytes: AtomicU64,
+    state: AtomicU8,
+    last_activity_ms: AtomicI64,
+    error: StdMutex<Option<String>>,
+}
+
+impl SegmentRuntime {
+    fn new(index: usize, start_byte: u64, end_byte: u64, downloaded_bytes: u64) -> Self {
+        Self {
+            index: index as u8,
+            start_byte,
+            end_byte,
+            downloaded_bytes: AtomicU64::new(downloaded_bytes),
+            state: AtomicU8::new(if downloaded_bytes == end_byte - start_byte + 1 {
+                SEGMENT_COMPLETED
+            } else {
+                SEGMENT_PENDING
+            }),
+            last_activity_ms: AtomicI64::new(0),
+            error: StdMutex::new(None),
+        }
+    }
+
+    fn set_state(&self, state: u8) {
+        self.state.store(state, Ordering::Relaxed);
+    }
+
+    fn mark_activity(&self, bytes: u64) {
+        self.downloaded_bytes.fetch_add(bytes, Ordering::Relaxed);
+        self.last_activity_ms
+            .store(Utc::now().timestamp_millis(), Ordering::Relaxed);
+    }
+
+    fn mark_failed(&self, message: String) {
+        self.set_state(SEGMENT_FAILED);
+        if let Ok(mut error) = self.error.lock() {
+            *error = Some(message);
+        }
+    }
+
+    fn snapshot(&self, speed_bytes: u64) -> SegmentProgress {
+        let last_activity_ms = self.last_activity_ms.load(Ordering::Relaxed);
+        SegmentProgress {
+            index: self.index,
+            start_byte: self.start_byte,
+            end_byte: Some(self.end_byte),
+            downloaded_bytes: self.downloaded_bytes.load(Ordering::Relaxed),
+            speed_bytes,
+            state: match self.state.load(Ordering::Relaxed) {
+                SEGMENT_CONNECTING => SegmentState::Connecting,
+                SEGMENT_DOWNLOADING => SegmentState::Downloading,
+                SEGMENT_COMPLETED => SegmentState::Completed,
+                SEGMENT_FAILED => SegmentState::Failed,
+                SEGMENT_STOPPED => SegmentState::Stopped,
+                _ => SegmentState::Pending,
+            },
+            last_activity_at: DateTime::from_timestamp_millis(last_activity_ms),
+            error: self.error.lock().ok().and_then(|error| error.clone()),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -263,11 +384,34 @@ async fn probe_source(
     })
 }
 
+fn single_stream_reason(probe: Option<&ProbeResult>, requested_threads: u8) -> String {
+    if requested_threads <= 1 {
+        return "Configurado para un único flujo".to_owned();
+    }
+    let Some(probe) = probe else {
+        return "No se pudo confirmar de forma segura el soporte de segmentos".to_owned();
+    };
+    if !probe.accepts_ranges {
+        return "El servidor no admite solicitudes por rango".to_owned();
+    }
+    if matches!(&probe.validator, SourceValidator::None) {
+        return "El servidor no proporciona un validador seguro".to_owned();
+    }
+    match &probe.size {
+        TransferSize::Unknown => "El servidor no informó el tamaño del archivo".to_owned(),
+        TransferSize::Known { total_bytes } if *total_bytes < MIN_SEGMENT_SIZE => {
+            "El archivo es demasiado pequeño para dividirlo".to_owned()
+        }
+        _ => "Se seleccionó un único flujo".to_owned(),
+    }
+}
+
 async fn run_single(
     input: EngineInput,
     client: Client,
     cancellation: CancellationToken,
-    progress: UnboundedSender<EngineProgress>,
+    progress: watch::Sender<Option<EngineProgress>>,
+    reason: Option<String>,
 ) -> Result<EngineOutput, EngineError> {
     let final_path = input.destination_dir.join(&input.item.file_name);
     ensure_destination_available(&final_path).await?;
@@ -279,6 +423,24 @@ async fn run_single(
         request = request.header(RANGE, format!("bytes={resume_at}-"));
         request = apply_if_range(request, &input.item.transfer.validator)?;
     }
+
+    send_progress(
+        &progress,
+        resume_at,
+        &input.item.transfer.size,
+        &input.item.transfer.validator,
+        &input.item.transfer.resume,
+        0,
+        single_telemetry(
+            TransferPhase::Connecting,
+            reason.clone(),
+            &input.item.transfer.size,
+            resume_at,
+            0,
+            SegmentState::Connecting,
+            None,
+        ),
+    );
 
     let mut response = tokio::select! {
         _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
@@ -322,26 +484,79 @@ async fn run_single(
     let mut downloaded = resume_at;
     let mut checkpoint_bytes = downloaded;
     let mut checkpoint_at = Instant::now();
+    let mut last_activity_at = None;
+    let mut interval = time::interval(PROGRESS_INTERVAL);
+    interval.tick().await;
 
-    send_progress(&progress, downloaded, &size, &validator, &resume, 0);
+    send_progress(
+        &progress,
+        downloaded,
+        &size,
+        &validator,
+        &resume,
+        0,
+        single_telemetry(
+            TransferPhase::Transferring,
+            reason.clone(),
+            &size,
+            downloaded,
+            0,
+            SegmentState::Downloading,
+            last_activity_at,
+        ),
+    );
     loop {
         let next = tokio::select! {
             _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
+            _ = interval.tick() => {
+                let speed = bytes_per_second(downloaded.saturating_sub(checkpoint_bytes), checkpoint_at.elapsed());
+                send_progress(
+                    &progress,
+                    downloaded,
+                    &size,
+                    &validator,
+                    &resume,
+                    speed,
+                    single_telemetry(
+                        TransferPhase::Transferring,
+                        reason.clone(),
+                        &size,
+                        downloaded,
+                        speed,
+                        SegmentState::Downloading,
+                        last_activity_at,
+                    ),
+                );
+                checkpoint_bytes = downloaded;
+                checkpoint_at = Instant::now();
+                continue;
+            }
             chunk = response.chunk() => chunk.map_err(|_| EngineError::Request)?,
         };
         let Some(chunk) = next else { break };
         limiter.acquire(chunk.len(), &cancellation).await?;
         output.write_all(&chunk).await.map_err(EngineError::File)?;
         downloaded += chunk.len() as u64;
-
-        if checkpoint_at.elapsed() >= PROGRESS_INTERVAL {
-            let speed = bytes_per_second(downloaded - checkpoint_bytes, checkpoint_at.elapsed());
-            send_progress(&progress, downloaded, &size, &validator, &resume, speed);
-            checkpoint_bytes = downloaded;
-            checkpoint_at = Instant::now();
-        }
+        last_activity_at = Some(Utc::now());
     }
 
+    send_progress(
+        &progress,
+        downloaded,
+        &size,
+        &validator,
+        &resume,
+        0,
+        single_telemetry(
+            TransferPhase::Finalizing,
+            reason.clone(),
+            &size,
+            downloaded,
+            0,
+            SegmentState::Downloading,
+            last_activity_at,
+        ),
+    );
     output.flush().await.map_err(EngineError::File)?;
     output
         .get_ref()
@@ -350,12 +565,30 @@ async fn run_single(
         .map_err(EngineError::File)?;
     verify_complete(downloaded, &size)?;
     finalize_partial(&partial_path, &final_path).await?;
-    send_progress(&progress, downloaded, &size, &validator, &resume, 0);
+    let telemetry = single_telemetry(
+        TransferPhase::Finalizing,
+        reason,
+        &size,
+        downloaded,
+        0,
+        SegmentState::Completed,
+        last_activity_at,
+    );
+    send_progress(
+        &progress,
+        downloaded,
+        &size,
+        &validator,
+        &resume,
+        0,
+        telemetry.clone(),
+    );
     Ok(EngineOutput {
         downloaded_bytes: downloaded,
         size,
         validator,
         resume,
+        telemetry,
     })
 }
 
@@ -364,7 +597,7 @@ async fn run_segmented(
     client: Client,
     probe: ProbeResult,
     cancellation: CancellationToken,
-    progress: UnboundedSender<EngineProgress>,
+    progress: watch::Sender<Option<EngineProgress>>,
 ) -> Result<EngineOutput, EngineError> {
     let TransferSize::Known { total_bytes } = probe.size else {
         return Err(EngineError::InvalidContentRange);
@@ -372,12 +605,13 @@ async fn run_segmented(
     let final_path = input.destination_dir.join(&input.item.file_name);
     ensure_destination_available(&final_path).await?;
     let ranges = split_ranges(total_bytes, input.item.threads);
-    let downloaded = Arc::new(AtomicU64::new(0));
     let limiter = BandwidthLimiter::new(input.item.speed_limit_bytes);
     let mut tasks = JoinSet::new();
     let size = TransferSize::Known { total_bytes };
     let resume = ResumeSupport::Supported;
-    send_progress(&progress, 0, &size, &probe.validator, &resume, 0);
+    let mode = TransferMode::Segmented;
+    let mut runtimes = Vec::with_capacity(ranges.len());
+    let mut workers = Vec::with_capacity(ranges.len());
 
     for (index, (start, end)) in ranges.iter().copied().enumerate() {
         let segment_path = segment_path(&input.destination_dir, &input.item.file_name, index);
@@ -390,12 +624,13 @@ async fn run_segmented(
             existing = 0;
         }
         let resumed = existing.min(expected);
-        downloaded.fetch_add(resumed, Ordering::Relaxed);
+        let runtime = Arc::new(SegmentRuntime::new(index, start, end, resumed));
+        runtimes.push(Arc::clone(&runtime));
         if resumed == expected {
             continue;
         }
 
-        let worker = SegmentWorker {
+        workers.push(SegmentWorker {
             client: client.clone(),
             source: input.item.source.clone(),
             validator: probe.validator.clone(),
@@ -404,28 +639,60 @@ async fn run_segmented(
             start: start + resumed,
             end,
             append: resumed > 0,
-            downloaded: Arc::clone(&downloaded),
             cancellation: cancellation.child_token(),
             limiter: limiter.clone(),
-        };
+            runtime,
+        });
+    }
+
+    let initial = snapshot_segments(&runtimes, &vec![0; runtimes.len()]);
+    let initial_downloaded = segments_downloaded(&initial);
+    send_progress(
+        &progress,
+        initial_downloaded,
+        &size,
+        &probe.validator,
+        &resume,
+        0,
+        segmented_telemetry(TransferPhase::Connecting, mode.clone(), initial),
+    );
+    for worker in workers {
         tasks.spawn(worker.run());
     }
 
     let mut interval = time::interval(PROGRESS_INTERVAL);
-    let mut checkpoint_bytes = downloaded.load(Ordering::Relaxed);
+    let mut segment_checkpoints = runtimes
+        .iter()
+        .map(|runtime| runtime.downloaded_bytes.load(Ordering::Relaxed))
+        .collect::<Vec<_>>();
     let mut checkpoint_at = Instant::now();
 
     while !tasks.is_empty() {
         tokio::select! {
             _ = cancellation.cancelled() => {
                 abort_segments(&mut tasks).await;
+                stop_active_segments(&runtimes);
                 return Err(EngineError::Cancelled);
             }
             _ = interval.tick() => {
-                let current = downloaded.load(Ordering::Relaxed);
-                let speed = bytes_per_second(current.saturating_sub(checkpoint_bytes), checkpoint_at.elapsed());
-                send_progress(&progress, current, &size, &probe.validator, &resume, speed);
-                checkpoint_bytes = current;
+                let elapsed = checkpoint_at.elapsed();
+                let segments = sample_segments(&runtimes, &mut segment_checkpoints, elapsed);
+                let current = segments_downloaded(&segments);
+                let speed = segments_speed(&segments);
+                let phase = if segments.iter().any(|segment| matches!(segment.state, SegmentState::Downloading)) {
+                    TransferPhase::Transferring
+                } else {
+                    TransferPhase::Connecting
+                };
+                send_progress(
+                    &progress,
+                    current,
+                    &size,
+                    &probe.validator,
+                    &resume,
+                    speed,
+                    segmented_telemetry(phase, mode.clone(), segments),
+                );
                 checkpoint_at = Instant::now();
             }
             result = tasks.join_next() => {
@@ -433,10 +700,40 @@ async fn run_segmented(
                     Some(Ok(Ok(()))) => {}
                     Some(Ok(Err(error))) => {
                         abort_segments(&mut tasks).await;
+                        stop_active_segments(&runtimes);
+                        let segments = snapshot_segments(&runtimes, &vec![0; runtimes.len()]);
+                        send_progress(
+                            &progress,
+                            segments_downloaded(&segments),
+                            &size,
+                            &probe.validator,
+                            &resume,
+                            0,
+                            segmented_telemetry(
+                                TransferPhase::Transferring,
+                                mode.clone(),
+                                segments,
+                            ),
+                        );
                         return Err(error);
                     }
                     Some(Err(_)) => {
                         abort_segments(&mut tasks).await;
+                        stop_active_segments(&runtimes);
+                        let segments = snapshot_segments(&runtimes, &vec![0; runtimes.len()]);
+                        send_progress(
+                            &progress,
+                            segments_downloaded(&segments),
+                            &size,
+                            &probe.validator,
+                            &resume,
+                            0,
+                            segmented_telemetry(
+                                TransferPhase::Transferring,
+                                mode.clone(),
+                                segments,
+                            ),
+                        );
                         return Err(EngineError::SegmentTask);
                     }
                     None => break,
@@ -445,21 +742,59 @@ async fn run_segmented(
         }
     }
 
+    let completed_segments = snapshot_segments(&runtimes, &vec![0; runtimes.len()]);
+    send_progress(
+        &progress,
+        total_bytes,
+        &size,
+        &probe.validator,
+        &resume,
+        0,
+        segmented_telemetry(
+            TransferPhase::Merging,
+            mode.clone(),
+            completed_segments.clone(),
+        ),
+    );
     let partial_path = partial_path(&input.destination_dir, &input.item.file_name);
     merge_segments(
         &partial_path,
         &input.destination_dir,
         &input.item.file_name,
         ranges.len(),
+        &cancellation,
     )
     .await?;
+    send_progress(
+        &progress,
+        total_bytes,
+        &size,
+        &probe.validator,
+        &resume,
+        0,
+        segmented_telemetry(
+            TransferPhase::Finalizing,
+            mode.clone(),
+            completed_segments.clone(),
+        ),
+    );
     finalize_partial(&partial_path, &final_path).await?;
-    send_progress(&progress, total_bytes, &size, &probe.validator, &resume, 0);
+    let telemetry = segmented_telemetry(TransferPhase::Finalizing, mode, completed_segments);
+    send_progress(
+        &progress,
+        total_bytes,
+        &size,
+        &probe.validator,
+        &resume,
+        0,
+        telemetry.clone(),
+    );
     Ok(EngineOutput {
         downloaded_bytes: total_bytes,
         size,
         validator: probe.validator,
         resume,
+        telemetry,
     })
 }
 
@@ -472,13 +807,25 @@ struct SegmentWorker {
     start: u64,
     end: u64,
     append: bool,
-    downloaded: Arc<AtomicU64>,
     cancellation: CancellationToken,
     limiter: BandwidthLimiter,
+    runtime: Arc<SegmentRuntime>,
 }
 
 impl SegmentWorker {
     async fn run(self) -> Result<(), EngineError> {
+        let runtime = Arc::clone(&self.runtime);
+        runtime.set_state(SEGMENT_CONNECTING);
+        let result = self.transfer().await;
+        match &result {
+            Ok(()) => runtime.set_state(SEGMENT_COMPLETED),
+            Err(EngineError::Cancelled) => runtime.set_state(SEGMENT_STOPPED),
+            Err(error) => runtime.mark_failed(error.to_string()),
+        }
+        result
+    }
+
+    async fn transfer(self) -> Result<(), EngineError> {
         let mut request = apply_source_headers(self.client.get(&self.source.url), &self.source)?
             .header(RANGE, format!("bytes={}-{}", self.start, self.end));
         request = apply_if_range(request, &self.validator)?;
@@ -498,6 +845,7 @@ impl SegmentWorker {
         if response_validator(response.headers()) != self.validator {
             return Err(EngineError::SourceChanged);
         }
+        self.runtime.set_state(SEGMENT_DOWNLOADING);
         let mut output = open_partial(&self.path, self.append).await?;
         let expected_bytes = self.end - self.start + 1;
         let mut received_bytes = 0_u64;
@@ -516,8 +864,7 @@ impl SegmentWorker {
                 return Err(EngineError::InvalidContentRange);
             }
             output.write_all(&chunk).await.map_err(EngineError::File)?;
-            self.downloaded
-                .fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            self.runtime.mark_activity(chunk.len() as u64);
         }
         if received_bytes != expected_bytes {
             return Err(EngineError::Request);
@@ -860,19 +1207,40 @@ async fn merge_segments(
     directory: &Path,
     file_name: &str,
     count: usize,
+    cancellation: &CancellationToken,
 ) -> Result<(), EngineError> {
     let output = File::create(destination).await.map_err(EngineError::File)?;
     let mut output = BufWriter::new(output);
+    let copied = async {
+        for index in 0..count {
+            let path = segment_path(directory, file_name, index);
+            let mut segment = File::open(&path).await.map_err(EngineError::File)?;
+            tokio::select! {
+                _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
+                result = tokio::io::copy(&mut segment, &mut output) => {
+                    result.map_err(EngineError::File)?;
+                }
+            }
+        }
+        output.flush().await.map_err(EngineError::File)?;
+        output.get_ref().sync_all().await.map_err(EngineError::File)
+    }
+    .await;
+    drop(output);
+    if let Err(error) = copied {
+        let _ = fs::remove_file(destination).await;
+        return Err(error);
+    }
+    if cancellation.is_cancelled() {
+        let _ = fs::remove_file(destination).await;
+        return Err(EngineError::Cancelled);
+    }
     for index in 0..count {
-        let path = segment_path(directory, file_name, index);
-        let mut segment = File::open(&path).await.map_err(EngineError::File)?;
-        tokio::io::copy(&mut segment, &mut output)
+        fs::remove_file(segment_path(directory, file_name, index))
             .await
             .map_err(EngineError::File)?;
-        fs::remove_file(path).await.map_err(EngineError::File)?;
     }
-    output.flush().await.map_err(EngineError::File)?;
-    output.get_ref().sync_all().await.map_err(EngineError::File)
+    Ok(())
 }
 
 async fn open_partial(path: &Path, append: bool) -> Result<BufWriter<File>, EngineError> {
@@ -1013,6 +1381,17 @@ async fn abort_segments(tasks: &mut JoinSet<Result<(), EngineError>>) {
     while tasks.join_next().await.is_some() {}
 }
 
+fn stop_active_segments(runtimes: &[Arc<SegmentRuntime>]) {
+    for runtime in runtimes {
+        if matches!(
+            runtime.state.load(Ordering::Relaxed),
+            SEGMENT_PENDING | SEGMENT_CONNECTING | SEGMENT_DOWNLOADING
+        ) {
+            runtime.set_state(SEGMENT_STOPPED);
+        }
+    }
+}
+
 fn verify_complete(downloaded: u64, size: &TransferSize) -> Result<(), EngineError> {
     if let TransferSize::Known { total_bytes } = size {
         if downloaded != *total_bytes {
@@ -1031,20 +1410,105 @@ fn segment_path(directory: &Path, file_name: &str, index: usize) -> PathBuf {
 }
 
 fn send_progress(
-    sender: &UnboundedSender<EngineProgress>,
+    sender: &watch::Sender<Option<EngineProgress>>,
     downloaded_bytes: u64,
     size: &TransferSize,
     validator: &SourceValidator,
     resume: &ResumeSupport,
     speed_bytes: u64,
+    telemetry: TransferTelemetry,
 ) {
-    let _ = sender.send(EngineProgress {
+    sender.send_replace(Some(EngineProgress {
         downloaded_bytes,
         size: size.clone(),
         validator: validator.clone(),
         resume: resume.clone(),
         speed_bytes,
-    });
+        telemetry,
+    }));
+}
+
+fn single_telemetry(
+    phase: TransferPhase,
+    reason: Option<String>,
+    size: &TransferSize,
+    downloaded_bytes: u64,
+    speed_bytes: u64,
+    state: SegmentState,
+    last_activity_at: Option<DateTime<Utc>>,
+) -> TransferTelemetry {
+    let end_byte = match size {
+        TransferSize::Known { total_bytes } if *total_bytes > 0 => Some(total_bytes - 1),
+        _ => None,
+    };
+    TransferTelemetry {
+        phase,
+        mode: TransferMode::Single { reason },
+        segments: vec![SegmentProgress {
+            index: 0,
+            start_byte: 0,
+            end_byte,
+            downloaded_bytes,
+            speed_bytes,
+            state,
+            last_activity_at,
+            error: None,
+        }],
+    }
+}
+
+fn segmented_telemetry(
+    phase: TransferPhase,
+    mode: TransferMode,
+    segments: Vec<SegmentProgress>,
+) -> TransferTelemetry {
+    TransferTelemetry {
+        phase,
+        mode,
+        segments,
+    }
+}
+
+fn snapshot_segments(runtimes: &[Arc<SegmentRuntime>], speeds: &[u64]) -> Vec<SegmentProgress> {
+    runtimes
+        .iter()
+        .enumerate()
+        .map(|(index, runtime)| runtime.snapshot(*speeds.get(index).unwrap_or(&0)))
+        .collect()
+}
+
+fn segments_downloaded(segments: &[SegmentProgress]) -> u64 {
+    segments
+        .iter()
+        .map(|segment| segment.downloaded_bytes)
+        .sum()
+}
+
+fn segments_speed(segments: &[SegmentProgress]) -> u64 {
+    segments.iter().map(|segment| segment.speed_bytes).sum()
+}
+
+fn sample_segments(
+    runtimes: &[Arc<SegmentRuntime>],
+    checkpoints: &mut [u64],
+    elapsed: Duration,
+) -> Vec<SegmentProgress> {
+    let speeds = runtimes
+        .iter()
+        .enumerate()
+        .map(|(index, runtime)| {
+            let current = runtime.downloaded_bytes.load(Ordering::Relaxed);
+            let speed = bytes_per_second(
+                current.saturating_sub(checkpoints.get(index).copied().unwrap_or(0)),
+                elapsed,
+            );
+            if let Some(checkpoint) = checkpoints.get_mut(index) {
+                *checkpoint = current;
+            }
+            speed
+        })
+        .collect::<Vec<_>>();
+    snapshot_segments(runtimes, &speeds)
 }
 
 fn bytes_per_second(bytes: u64, elapsed: Duration) -> u64 {
@@ -1067,9 +1531,11 @@ mod tests {
 
     use super::{
         content_disposition_file_name, content_range_total, ensure_same_source,
-        file_name_from_response_url, response_validator, resume_support,
-        segmented_failure_allows_single_stream, split_ranges, transfer_duration,
-        validate_content_range, EngineError, ResumeSupport, SourceValidator, MIN_SEGMENT_SIZE,
+        file_name_from_response_url, merge_segments, response_validator, resume_support,
+        segmented_failure_allows_single_stream, segments_downloaded, segments_speed,
+        single_stream_reason, split_ranges, transfer_duration, validate_content_range, EngineError,
+        ProbeResult, ResumeSupport, SegmentRuntime, SegmentState, SourceValidator, TransferSize,
+        MIN_SEGMENT_SIZE, SEGMENT_DOWNLOADING,
     };
 
     #[test]
@@ -1083,6 +1549,58 @@ mod tests {
             assert_eq!(pair[0].1 + 1, pair[1].0);
         }
         assert!(ranges.len() <= 4);
+    }
+
+    #[test]
+    fn segment_runtime_reports_only_its_own_range_and_progress() {
+        let runtime = SegmentRuntime::new(2, 200, 299, 20);
+        runtime.set_state(SEGMENT_DOWNLOADING);
+        runtime.mark_activity(30);
+
+        let segment = runtime.snapshot(4_096);
+
+        assert_eq!(segment.index, 2);
+        assert_eq!((segment.start_byte, segment.end_byte), (200, Some(299)));
+        assert_eq!(segment.downloaded_bytes, 50);
+        assert_eq!(segment.speed_bytes, 4_096);
+        assert!(matches!(segment.state, SegmentState::Downloading));
+        assert!(segment.last_activity_at.is_some());
+        assert_eq!(segments_downloaded(std::slice::from_ref(&segment)), 50);
+        assert_eq!(segments_speed(std::slice::from_ref(&segment)), 4_096);
+    }
+
+    #[test]
+    fn single_stream_reason_explains_why_segments_are_not_used() {
+        assert!(single_stream_reason(None, 8).contains("confirmar"));
+        let small = ProbeResult {
+            size: TransferSize::Known {
+                total_bytes: MIN_SEGMENT_SIZE - 1,
+            },
+            validator: SourceValidator::Etag {
+                value: "\"safe\"".to_owned(),
+            },
+            accepts_ranges: true,
+        };
+        assert!(single_stream_reason(Some(&small), 8).contains("pequeño"));
+    }
+
+    #[tokio::test]
+    async fn cancelled_merge_keeps_segments_available_for_resume() {
+        let directory = std::env::temp_dir().join(format!("fluxor-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        let file_name = "archive.zip";
+        let segment = super::segment_path(&directory, file_name, 0);
+        tokio::fs::write(&segment, b"partial").await.unwrap();
+        let destination = super::partial_path(&directory, file_name);
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        cancellation.cancel();
+
+        let result = merge_segments(&destination, &directory, file_name, 1, &cancellation).await;
+
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        assert!(tokio::fs::try_exists(segment).await.unwrap());
+        assert!(!tokio::fs::try_exists(destination).await.unwrap());
+        tokio::fs::remove_dir_all(directory).await.unwrap();
     }
 
     #[test]

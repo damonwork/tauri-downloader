@@ -93,6 +93,68 @@ pub struct TransferProgress {
     pub resume: ResumeSupport,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferPhase {
+    #[default]
+    Idle,
+    Preparing,
+    Probing,
+    Connecting,
+    Transferring,
+    Merging,
+    Finalizing,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum TransferMode {
+    #[default]
+    Pending,
+    Single {
+        reason: Option<String>,
+    },
+    Segmented,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SegmentState {
+    #[default]
+    Pending,
+    Connecting,
+    Downloading,
+    Paused,
+    Completed,
+    Failed,
+    Stopped,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SegmentProgress {
+    pub index: u8,
+    pub start_byte: u64,
+    pub end_byte: Option<u64>,
+    pub downloaded_bytes: u64,
+    pub speed_bytes: u64,
+    pub state: SegmentState,
+    pub last_activity_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferTelemetry {
+    pub phase: TransferPhase,
+    pub mode: TransferMode,
+    pub segments: Vec<SegmentProgress>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(
     tag = "kind",
@@ -117,6 +179,8 @@ pub struct DownloadItem {
     pub source: DownloadSource,
     pub destination: String,
     pub transfer: TransferProgress,
+    #[serde(default)]
+    pub telemetry: TransferTelemetry,
     pub threads: u8,
     #[serde(default)]
     pub speed_limit_bytes: u64,
@@ -236,9 +300,22 @@ pub struct RevisionEvent {
     pub revision: u64,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadProgressEvent {
+    pub revision: u64,
+    pub download_id: String,
+    pub state: DownloadState,
+    pub transfer: TransferProgress,
+    pub telemetry: TransferTelemetry,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, DownloadItem, ResumeSupport, TransferProgress};
+    use super::{
+        AppSettings, DownloadItem, ResumeSupport, TransferMode, TransferPhase, TransferProgress,
+    };
 
     #[test]
     fn version_0_1_0_state_fields_receive_safe_defaults() {
@@ -260,5 +337,7 @@ mod tests {
         .unwrap();
         assert_eq!(item.speed_limit_bytes, 0);
         assert!(matches!(item.transfer.resume, ResumeSupport::Unknown));
+        assert!(matches!(item.telemetry.phase, TransferPhase::Idle));
+        assert!(matches!(item.telemetry.mode, TransferMode::Pending));
     }
 }

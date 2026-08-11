@@ -36,6 +36,52 @@ export interface TransferProgress {
   resume: ResumeSupport;
 }
 
+export type TransferPhase =
+  | "idle"
+  | "preparing"
+  | "probing"
+  | "connecting"
+  | "transferring"
+  | "merging"
+  | "finalizing";
+
+export type TransferMode =
+  | { kind: "pending" }
+  | { kind: "single"; reason: string | null }
+  | { kind: "segmented" };
+
+export type SegmentState =
+  | "pending"
+  | "connecting"
+  | "downloading"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "stopped";
+
+export interface SegmentProgress {
+  index: number;
+  startByte: number;
+  endByte: number | null;
+  downloadedBytes: number;
+  speedBytes: number;
+  state: SegmentState;
+  lastActivityAt: string | null;
+  error: string | null;
+}
+
+export interface TransferTelemetry {
+  phase: TransferPhase;
+  mode: TransferMode;
+  segments: SegmentProgress[];
+}
+
+export const EMPTY_TRANSFER_TELEMETRY: TransferTelemetry = {
+  phase: "idle",
+  mode: { kind: "pending" },
+  segments: [],
+};
+
 export type DownloadState =
   | { kind: "queued" }
   | { kind: "downloading"; speedBytes: number }
@@ -51,6 +97,7 @@ export interface DownloadItem {
   source: DownloadSource;
   destination: string;
   transfer: TransferProgress;
+  telemetry: TransferTelemetry;
   threads: number;
   speedLimitBytes: number;
   createdAt: string;
@@ -58,6 +105,15 @@ export interface DownloadItem {
 }
 
 export type DownloadAction = "pause" | "resume" | "retry" | "restart" | "remove";
+
+export interface DownloadProgressEvent {
+  revision: number;
+  downloadId: string;
+  state: DownloadState;
+  transfer: TransferProgress;
+  telemetry: TransferTelemetry;
+  updatedAt: string;
+}
 
 export interface CreateDownloadInput {
   source: DownloadSource;
@@ -89,6 +145,29 @@ export interface DownloadStats {
 export function progressOf(item: DownloadItem): number {
   if (item.transfer.size.kind === "unknown" || item.transfer.size.totalBytes <= 0) return 0;
   return Math.min(100, Math.round((item.transfer.downloadedBytes / item.transfer.size.totalBytes) * 100));
+}
+
+export function segmentSize(segment: SegmentProgress): number | undefined {
+  if (segment.endByte === null || segment.endByte < segment.startByte) return undefined;
+  return segment.endByte - segment.startByte + 1;
+}
+
+export function segmentProgressOf(segment: SegmentProgress): number | undefined {
+  const total = segmentSize(segment);
+  if (!total) return undefined;
+  return Math.min(100, Math.round((segment.downloadedBytes / total) * 100));
+}
+
+export function applyDownloadProgress(items: DownloadItem[], progress: DownloadProgressEvent): DownloadItem[] {
+  return items.map((item) => item.id === progress.downloadId
+    ? {
+        ...item,
+        state: progress.state,
+        transfer: progress.transfer,
+        telemetry: progress.telemetry,
+        updatedAt: progress.updatedAt,
+      }
+    : item);
 }
 
 export function deriveStats(items: DownloadItem[]): DownloadStats {
