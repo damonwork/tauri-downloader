@@ -1,0 +1,64 @@
+<script setup lang="ts">
+import { computed, ref, watch } from "vue";
+import type { DownloadAction, DownloadItem, DownloadSource } from "@/domain/download";
+import { parseRequest } from "@/domain/ingest";
+import { formatBytes, formatSpeed, hostOf, redactUrl } from "@/domain/format";
+import { progressOf } from "@/domain/download";
+import AppIcon from "./AppIcon.vue";
+
+const props = defineProps<{ item: DownloadItem }>();
+const emit = defineEmits<{ close: []; action: [action: DownloadAction]; replace: [source: DownloadSource] }>();
+const replacing = ref(false);
+const replacement = ref("");
+const replacementError = ref("");
+
+watch(() => props.item.id, () => { replacing.value = false; replacement.value = ""; replacementError.value = ""; });
+
+const total = computed(() => props.item.transfer.size.kind === "known" ? props.item.transfer.size.totalBytes : undefined);
+const speed = computed(() => props.item.state.kind === "downloading" ? props.item.state.speedBytes : 0);
+const validatorLabel = computed(() => {
+  if (props.item.transfer.validator.kind === "none") return "Sin validador";
+  return props.item.transfer.validator.kind === "etag" ? "ETag verificado" : "Last-Modified verificado";
+});
+const failedAction = computed<DownloadAction>(() =>
+  props.item.state.kind === "failed" && !props.item.state.recoverable ? "restart" : "retry",
+);
+
+function submitReplacement(): void {
+  try {
+    const parsed = parseRequest(replacement.value);
+    emit("replace", { ...parsed.source, proxy: props.item.source.proxy });
+    replacing.value = false;
+    replacementError.value = "";
+  } catch (error) {
+    replacementError.value = error instanceof Error ? error.message : "Enlace inválido";
+  }
+}
+</script>
+
+<template>
+  <aside class="detail-panel">
+    <header><div><p>INSPECTOR</p><h2>Detalle de descarga</h2></div><button type="button" aria-label="Cerrar" @click="emit('close')"><AppIcon name="close" /></button></header>
+    <div class="detail-scroll">
+      <div class="file-hero"><span><AppIcon name="file" :size="26" /></span><h3>{{ item.fileName }}</h3><p>{{ hostOf(item.source.url) }}</p></div>
+      <div class="hero-progress"><div><strong>{{ progressOf(item) }}%</strong><span>{{ formatBytes(item.transfer.downloadedBytes) }} / {{ formatBytes(total) }}</span></div><div class="track"><i :style="{width:`${progressOf(item)}%`}"></i></div></div>
+      <div class="detail-actions">
+        <button v-if="item.state.kind === 'downloading'" class="primary" type="button" @click="emit('action','pause')"><AppIcon name="pause" :size="16" />Pausar</button>
+        <button v-else-if="item.state.kind !== 'completed'" class="primary" type="button" @click="emit('action',item.state.kind === 'failed' ? failedAction : 'resume')"><AppIcon :name="item.state.kind === 'failed' ? 'refresh' : 'play'" :size="16" />{{ item.state.kind === 'failed' ? (failedAction === 'restart' ? 'Reiniciar' : 'Reintentar') : 'Reanudar' }}</button>
+        <button type="button" @click="replacing = !replacing"><AppIcon name="link" :size="16" />Actualizar enlace</button>
+      </div>
+
+      <form v-if="replacing" class="replace-form" @submit.prevent="submitReplacement"><label>NUEVO ENLACE O CURL<textarea v-model="replacement" name="replacement-request" autofocus placeholder="https://... o curl 'https://...'" /></label><p v-if="replacementError">{{ replacementError }}</p><div><button type="button" @click="replacing=false">Cancelar</button><button class="save" type="submit">Validar y reanudar</button></div></form>
+
+      <section class="details-section"><h4>TRANSFERENCIA</h4><dl><div><dt>Velocidad</dt><dd>{{ formatSpeed(speed) }}</dd></div><div><dt>Conexiones</dt><dd>{{ item.threads }} segmentos</dd></div><div><dt>Identidad</dt><dd>{{ validatorLabel }}</dd></div><div><dt>Destino</dt><dd>{{ item.destination }}</dd></div></dl></section>
+      <section class="details-section"><h4>SEGMENTOS</h4><div class="segments"><i v-for="thread in item.threads" :key="thread" :class="{complete: thread/item.threads <= progressOf(item)/100}"></i></div><p class="section-note">Cada segmento escribe directamente a disco. La memoria se mantiene acotada al bloque de red actual.</p></section>
+      <section class="details-section"><h4>SOLICITUD</h4><dl><div><dt>Headers</dt><dd>{{ item.source.headers.length }}</dd></div><div><dt>Cookies</dt><dd>{{ item.source.cookies.length }}</dd></div><div><dt>Ruta</dt><dd class="url" :title="redactUrl(item.source.url)">{{ redactUrl(item.source.url) }}</dd></div></dl></section>
+      <div class="integrity"><AppIcon name="shield" :size="18" /><div><strong>Reanudación protegida</strong><p>Fluxor valida el rango y el origen antes de anexar bytes.</p></div></div>
+    </div>
+  </aside>
+</template>
+
+<style scoped>
+.detail-panel{width:334px;flex:0 0 334px;height:100vh;border-left:1px solid var(--line);background:#0a0f0d;position:sticky;top:0;overflow:hidden}.detail-panel>header{height:80px;padding:0 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}.detail-panel header p{margin:0 0 4px;color:#626d67;font:8px var(--mono);letter-spacing:.14em}.detail-panel h2{margin:0;font-size:14px}.detail-panel header button{width:32px;height:32px;border:0;background:transparent;color:#6b7570;cursor:pointer}.detail-scroll{height:calc(100vh - 80px);overflow:auto;padding:22px 20px 40px}.file-hero{text-align:center}.file-hero>span{width:52px;height:57px;border-radius:9px;background:#171e1b;color:#8f9a94;display:grid;place-items:center;margin:auto}.file-hero h3{margin:14px auto 5px;max-width:260px;font-size:12px;overflow-wrap:anywhere}.file-hero p{margin:0;color:#66706b;font:9px var(--mono)}.hero-progress{margin-top:22px}.hero-progress>div:first-child{display:flex;align-items:flex-end;justify-content:space-between}.hero-progress strong{font:22px var(--mono)}.hero-progress span{color:#6c7671;font:8px var(--mono)}.track{height:4px;margin-top:9px;background:#212925;border-radius:4px;overflow:hidden}.track i{display:block;height:100%;background:var(--accent)}.detail-actions{margin-top:17px;display:grid;grid-template-columns:1fr 1.35fr;gap:7px}.detail-actions button{height:36px;border:1px solid #29322e;border-radius:6px;background:#121815;color:#8f9994;font-size:9px;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}.detail-actions button.primary{border-color:transparent;background:var(--accent);color:#11180e;font-weight:700}.replace-form{margin-top:12px;padding:12px;border:1px solid #334038;border-radius:7px;background:#101613}.replace-form label{color:#68736d;font:8px var(--mono);letter-spacing:.08em}.replace-form textarea{display:block;width:100%;height:68px;margin-top:7px;padding:8px;resize:none;border:1px solid #29332e;border-radius:5px;background:#090e0c;color:#d6ddd9;font:9px/1.5 var(--mono);outline:none}.replace-form p{margin:6px 0;color:var(--danger);font-size:9px}.replace-form>div{margin-top:8px;display:flex;justify-content:flex-end;gap:6px}.replace-form button{height:27px;border:0;background:transparent;color:#7f8984;font-size:9px;cursor:pointer}.replace-form button.save{padding:0 9px;border-radius:4px;background:var(--accent);color:#11170f}.details-section{margin-top:27px}.details-section h4{margin:0 0 12px;color:#69736e;font:8px var(--mono);letter-spacing:.14em}.details-section dl{margin:0}.details-section dl>div{min-height:31px;border-bottom:1px solid #1a211e;display:flex;align-items:center;justify-content:space-between;gap:15px}.details-section dt{color:#68726d;font-size:9px}.details-section dd{margin:0;max-width:190px;color:#aab3ae;font:9px var(--mono);text-align:right}.details-section dd.url{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.segments{display:grid;grid-template-columns:repeat(8,1fr);gap:3px}.segments i{height:18px;border-radius:2px;background:#232c27}.segments i.complete{background:var(--accent)}.section-note{color:#5e6863;font-size:9px;line-height:1.55}.integrity{margin-top:26px;padding:12px;border:1px solid #27322c;border-radius:7px;background:rgba(194,255,91,.025);display:flex;gap:10px;color:var(--accent)}.integrity strong{display:block;font-size:9px;color:#aeb8b2}.integrity p{margin:3px 0 0;color:#65706a;font-size:8px;line-height:1.4}
+@media(max-width:1180px){.detail-panel{position:fixed;z-index:40;right:0;top:0;box-shadow:-20px 0 50px rgba(0,0,0,.4)}}@media(max-width:520px){.detail-panel{width:100%;}}
+</style>

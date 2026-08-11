@@ -1,156 +1,149 @@
-# tauri-downloader
+# Fluxor
 
-> Un gestor de descargas moderno, robusto y fácil de usar — construido con **Tauri** (Rust + Web).
-> Pensado como un sucesor espiritual de IDM, pero multiplataforma, extensible y sin la fricción típica.
+Gestor de descargas de escritorio construido con **Tauri 2, Rust, Vue 3 y TypeScript**.
+Su objetivo es ofrecer descargas segmentadas, reanudación segura, credenciales por enlace,
+importación de `curl` y perfiles proxy con una interfaz sencilla.
 
----
+## Estado actual
 
-## Visión
+El repositorio contiene un MVP funcional:
 
-Ser el **"IDM, pero bien hecho"**: una sola herramienta que sirva tanto desde el navegador
-(como extensión / web app) como desde el escritorio (instalador nativo), con la potencia de
-**descargas multi-hilo, reanudar descargas, cookies por enlace, soporte para pegar `curl`,
-rotación de proxies y recuperación de enlaces vencidos**, sin obligar al usuario a pelearse
-con la configuración.
+- [x] Alta mediante URL HTTP/HTTPS.
+- [x] Parser seguro de `curl` para GET/HEAD, headers, cookies, User-Agent, Referer y proxy.
+- [x] Cola nativa con límite global de descargas simultáneas.
+- [x] Descargas de 1 a 32 segmentos cuando el servidor admite rangos.
+- [x] Escritura incremental a disco con memoria acotada al bloque de red actual.
+- [x] Pausar, reanudar, reiniciar, reintentar manualmente y eliminar.
+- [x] Reanudación validada con `Range`, `Content-Range`, ETag o Last-Modified.
+- [x] Reemplazo de enlaces vencidos sin perder segmentos parciales compatibles.
+- [x] Headers y cookies específicos por descarga.
+- [x] Perfiles proxy HTTP, HTTPS y SOCKS5.
+- [x] Carpeta raíz configurable y subcarpetas por categoría dentro de Descargas del sistema.
+- [x] Configuración individual por descarga: categoría, ruta, segmentos, proxy y credenciales.
+- [x] Persistencia local atómica de cola, ajustes y perfiles.
+- [x] Interfaz responsive con búsqueda, filtros, inspector y atajos.
+- [x] Vista web persistente para probar la UX sin ejecutar transferencias reales.
+- [ ] Reintentos automáticos con backoff y clasificación de errores.
+- [ ] Verificación SHA-256 al completar.
+- [ ] Integración con el almacén seguro del sistema para secretos persistentes.
+- [ ] Extensión de navegador y captura del portapapeles.
+- [ ] Auto-update, bandeja del sistema y notificaciones nativas.
 
-### Principios de diseño
+## Separación de capacidades
 
-1. **Robusto por defecto** — las descargas no se rompen: reanuda, valida checksums, refresca enlaces.
-2. **Sencillo por encima** — el 90 % de los casos funciona con *pegar URL → Enter*.
-3. **Avanzado cuando se necesita** — configuración por enlace, perfiles, scripts, proxies.
-4. **Local-first** — todo el estado vive en el equipo del usuario; sin servidor propio obligatorio.
-5. **Misma UX en web y escritorio** — Tauri permite compartir el frontend entre navegador y binario.
+La UI se comparte entre navegador y Tauri, pero las capacidades no se simulan como si fueran
+equivalentes:
 
----
+| Capacidad | Vista web | Tauri |
+|---|---:|---:|
+| Gestionar y persistir una cola de demostración | Sí | Sí |
+| Parsear URL y `curl` | Sí | Sí |
+| Descargar sin CORS | No | Sí |
+| Enviar cookies y headers arbitrarios | No | Sí |
+| Usar proxies | Configuración solamente | Sí |
+| Reanudar después de reiniciar el proceso | Simulado | Sí |
 
-## Funcionalidades objetivo
+Las transferencias reales siempre recaen en Rust. La vista web existe para desarrollo,
+documentación y futuras integraciones con un servicio compañero autenticado.
 
-### Núcleo
-- [ ] Añadir descargas pegando una **URL** directa.
-- [ ] Pegar un comando **`curl`** completo y extraer URL, headers, cookies y método automáticamente.
-- [ ] Importar una lista de URLs desde texto / archivo.
-- [ ] Captura desde el portapapeles (detección automática de enlaces y `curl`).
-- [ ] Descargas **multi-hilo** (configurable: 1–32 hilos por archivo).
-- [ ] **Reanudar** descargas parciales con validación de rangos HTTP (`Range`).
-- [ ] Cola de descargas con prioridades, reintentos y *backoff* exponencial.
-- [ ] Historial de descargas con búsqueda y filtros.
+## Arquitectura
 
-### Por enlace
-- [ ] **Cookies por enlace** — editor visual (pares `nombre=valor`) + importar desde `curl`/Netscape.
-- [ ] **Headers personalizados** por enlace (User-Agent, Referer, Authorization, …).
-- [ ] **Refrescar enlace** cuando vence (re-detectar mirror / regenerar URL firmada).
-- [ ] Renombrado de archivo destino con plantillas (`{host}`, `{date}`, `{n}`, …).
-- [ ] Hash de verificación (MD5/SHA1/SHA256) automático al terminar.
-
-### Red
-- [ ] **Lista de proxies** configurable (HTTP, HTTPS, SOCKS5).
-- [ ] Asignación de proxy por enlace o por perfil (directo / sistema / lista rotativa).
-- [ ] Reglas tipo "si el host coincide con X, usa proxy Y".
-- [ ] Detección de proxy del sistema (Windows / macOS / Linux).
-
-### Interfaz
-- [ ] UI web moderna (React + TypeScript) servida por Tauri.
-- [ ] Tema claro / oscuro.
-- [ ] Vista de cola, vista de activos, vista de historial.
-- [ ] Notificaciones nativas al terminar / fallar.
-- [ ] Atajos de teclado y *drag & drop* de archivos/URLs.
-
-### Integración navegador (fase 2)
-- [ ] Extensión Chrome/Firefox para "Enviar a tauri-downloader".
-- [ ] Web app standalone que habla con el backend Tauri por WebSocket.
-
----
-
-## Stack técnico
-
-| Capa        | Tecnología                                         |
-|-------------|----------------------------------------------------|
-| Backend     | **Rust** + Tauri 2 + `reqwest` + `tokio`           |
-| Frontend    | **React** + TypeScript + Vite + TailwindCSS        |
-| Estado      | Zustand / TanStack Query                           |
-| Persistencia| SQLite (vía `rusqlite` o `sqlx`) en `app_data_dir` |
-| Empaquetado| Tauri bundler (deb, rpm, msi, dmg, AppImage)       |
-| CI          | GitHub Actions (build multi-OS + release)          |
-
----
-
-## Arquitectura (resumen)
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   Frontend (Web)                    │
-│  React UI  ──►  Tauri Commands  ──►  Tauri Events   │
-└────────────────────────┬────────────────────────────┘
-                         │  IPC (Tauri)
-┌────────────────────────▼────────────────────────────┐
-│                 Backend (Rust)                      │
-│  ┌──────────┐  ┌──────────�  ┌───────────────────┐  │
-│  │ Download │  │  Queue   │  │  Proxy / Cookie   │  │
-│  │  Engine  │◄─┤ Manager  │◄─┤   Resolver        │  │
-│  └────┬─────�  └──────────┘  └───────────────────┘  │
-│       │                                              │
-│  ┌────▼─────┐  ┌──────────┐  ┌───────────────────┐  │
-│  │ Chunked  │  │ Refresh  │  │   SQLite Store    │  │
-│  │ Writer   │  │  Policy  │  │  (history,queue)  │  │
-│  └──────────┘  └──────────┘  └───────────────────┘  │
-└─────────────────────────────────────────────────────┘
+```text
+Vue components
+    |
+    v
+useDownloadManager (casos de uso y estado de presentación)
+    |
+    v
+DownloadGateway
+    |-- WebDownloadGateway   (preview persistente, sin red real)
+    `-- TauriDownloadGateway (IPC tipado)
+              |
+              v
+      async Tauri commands
+              |
+              v
+       DownloadManager       (cola, estado y persistencia)
+              |
+              v
+       DownloadEngine        (HTTP, rangos, segmentos y archivos)
 ```
 
----
+Los DTO usan estados discriminados en lugar de combinaciones ambiguas de campos opcionales.
+Por ejemplo, `DownloadState::Failed` siempre contiene su mensaje y `ProxyHealth::Online`
+siempre contiene la latencia. Consulta [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-## Estructura del repositorio (planeada)
+## Desarrollo
 
-```
-tauri-downloader/
-├── src-tauri/           # Backend Rust (Tauri)
-│   ├── src/
-│   │   ├── main.rs
-│   │   ├── download/    # motor de descarga, chunks, resume
-│   │   ├── queue/       # cola, prioridades, scheduler
-│   │   ├── net/         # proxy, cookies, refresh
-│   │   ├── curl/        # parser de curl
-│   │   └── store/       # SQLite, migraciones
-│   └── tauri.conf.json
-├── src/                 # Frontend React
-│   ├── components/
-│   ├── pages/
-│   ├── hooks/
-│   └── store/
-├── public/
-├── docs/                # arquitectura, decisiones, capturas
-├── .github/workflows/   # CI
-├── README.md
-└── LICENSE
-```
-
----
-
-## Cómo empezar (una vez inicializado Tauri)
+Requisitos para la interfaz:
 
 ```bash
-# requisitos: rustup, node ≥ 18, pnpm
-pnpm install
-pnpm tauri dev      # modo desarrollo
-pnpm tauri build    # generar instaladores
+npm ci
+npm run dev
+npm run build
+npm test
 ```
 
----
+Requisitos adicionales para escritorio: Rust estable y las dependencias de sistema indicadas
+por Tauri 2.
+
+```bash
+npm run tauri dev
+npm run tauri build
+```
+
+## Validación sin Rust local
+
+La vista de producción puede ejecutarse en la red Docker externa `proxy` sin publicar puertos:
+
+```bash
+docker compose -f compose.preview.yaml up --build -d
+```
+
+Otros contenedores de esa red pueden acceder a `http://fluxor-preview:4173`. El servicio no
+define `ports` ni `expose`, por lo que no queda accesible directamente desde el host.
+
+Para validar Rust en un contenedor Debian se requieren las dependencias de Tauri/WebKitGTK y
+estos comandos dentro de `src-tauri/`:
+
+```bash
+cargo fmt --all --check
+cargo check --locked
+cargo test --locked --lib
+```
+
+## Integración continua
+
+- `quality.yaml` valida frontend, pruebas, versiones, formato Rust, Clippy y `cargo check`.
+- `release.yaml` se activa con tags `v*` y exige que el tag coincida con la versión del proyecto.
+- Windows genera instaladores NSIS `.exe` y MSI.
+- Linux genera AppImage y deb.
+- macOS genera DMG/app para Intel y Apple Silicon.
+- Los artefactos temporales del workflow se conservan 2 días.
+- Los releases se crean como borradores para poder firmar/revisar antes de publicarlos.
+
+## Seguridad
+
+- El texto `curl` se interpreta como datos y nunca se entrega a un shell.
+- Se rechazan opciones que leen archivos locales o envían cuerpos/formularios.
+- Rust vuelve a validar URLs, nombres, headers, cookies, proxies y rutas.
+- Los eventos de progreso solo contienen la revisión del snapshot, nunca secretos.
+- Los errores de red no incluyen la URL solicitada.
+- Una respuesta reanudada debe ser `206` y coincidir con el rango exacto solicitado.
+- Un parcial sin ETag o Last-Modified no se anexa: se exige reiniciar para evitar corrupción.
+- Las redirecciones se desactivan cuando la solicitud contiene cookies o headers personalizados.
+- Dos descargas no pueden reservar el mismo archivo de destino.
+- Los archivos se descargan como parciales ocultos y se renombran al finalizar.
+
+Actualmente el estado se guarda en el directorio privado de datos de la aplicación como JSON.
+Esto permite recuperar cookies y headers después de reiniciar, pero todavía no cifra secretos
+en reposo. No debe considerarse adecuado para equipos compartidos hasta integrar el almacén
+seguro del sistema.
 
 ## Roadmap
 
-- **v0.1 — MVP escritorio**: pegar URL / curl, descarga simple, reanudar, SQLite básico.
-- **v0.2 — Multi-hilo y cookies por enlace**.
-- **v0.3 — Proxies + perfiles**.
-- **v0.4 — Extensión de navegador + web app**.
-- **v1.0 — Release multiplataforma con auto-update**.
-
----
-
-## Contribuir
-
-Aún en fase temprana. Issues y PRs son bienvenidos, pero por favor abrí primero un *issue*
-para discutir cambios grandes.
-
-## Licencia
-
-MIT (a confirmar).
+1. Pruebas HTTP de integración con servidor controlado: rangos, desconexiones y cambio de ETag.
+2. Reintentos automáticos con backoff sin ocupar slots de concurrencia.
+3. Checksums, límites por host y rotación de proxies.
+4. Almacén seguro de credenciales y migraciones de persistencia.
+5. Extensión Chrome/Firefox, auto-update y releases multiplataforma.

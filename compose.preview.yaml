@@ -1,0 +1,13 @@
+services:
+  fluxor-preview:
+    build:
+      context: .
+      dockerfile: Dockerfile.preview
+    container_name: fluxor-preview
+    restart: unless-stopped
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
