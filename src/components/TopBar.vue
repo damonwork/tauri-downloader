@@ -34,4 +34,7 @@ const emit = defineEmits<{ add: []; settings: []; proxies: []; "update:search": 
 .runtime-chip { border: 1px solid #29352f; padding: 7px 9px; border-radius: 5px; color: #84918b; font: 9px var(--mono); text-transform: uppercase; letter-spacing: .07em; }.runtime-chip i { display: inline-block; width: 5px; height: 5px; margin-right: 6px; border-radius: 50%; background: #e0a84b; }
 @media (max-width: 1120px) { .top-bar { grid-template-columns: auto 1fr auto; }.runtime-chip,.add-button kbd { display: none; } }
 @media (max-width: 760px) { .top-bar { min-height: auto; padding: 16px; display: flex; flex-wrap: wrap; gap: 8px; position: static; }.page-title { flex: 1; min-width: 120px; }.page-title h1 { font-size: 21px; }.search-box { order: 3; flex: 1 0 100%; margin-top: 4px; }.add-button { width: 40px; padding: 0; justify-content: center; }.add-button span { display: none; } }
+@container workspace (max-width:900px){.top-bar{padding:20px;grid-template-columns:auto minmax(180px,1fr) auto;gap:12px}.runtime-chip,.add-button kbd,.top-actions>.icon-button{display:none}}
+@container workspace (max-width:620px){.top-bar{min-height:auto;padding:16px;display:flex;flex-wrap:wrap;gap:8px}.page-title{flex:1;min-width:120px}.page-title h1{font-size:21px}.search-box{order:3;flex:1 0 100%;margin-top:4px}.top-actions{gap:6px}.add-button{height:38px}}
+@media(max-width:760px){.top-actions>.icon-button{display:grid}.add-button{width:40px;padding:0;justify-content:center}.add-button span{display:none}}
 </style>

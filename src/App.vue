@@ -176,7 +176,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", keyboardShortcuts));
 <template>
   <div class="app-shell">
     <SideRail :active="filter" :counts="counts" @filter="setFilter" @settings="showSettings=true" @proxies="showProxies=true" />
-    <main class="workspace">
+    <main class="workspace" :class="{ 'inspector-open': selectedItem }">
       <TopBar v-model:search="search" :web-mode="capabilities.runtime === 'web'" @add="showAdd=true" @settings="showSettings=true" @proxies="showProxies=true" />
 
       <div v-if="noticeVisible" class="runtime-notice">

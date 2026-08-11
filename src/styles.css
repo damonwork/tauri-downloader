@@ -22,7 +22,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 button:disabled { cursor: not-allowed; }
 
 .app-shell { min-height: 100vh; display: flex; background: radial-gradient(circle at 54% -15%, rgba(65,90,72,.12), transparent 34%), #0b100e; }
-.workspace { min-width: 0; flex: 1; position: relative; }
+.workspace { min-width: 0; flex: 1; position: relative; container: workspace / inline-size; }
 .runtime-notice, .error-banner { min-height: 43px; margin: 14px 30px 0; padding: 8px 12px; border: 1px solid #493d28; border-radius: 7px; background: rgba(202,151,64,.035); color: #cf9d49; display: flex; align-items: center; gap: 9px; }
 .runtime-notice p, .error-banner p { flex: 1; margin: 0; color: #7b705d; font-size: 9px; line-height: 1.45; }
 .runtime-notice strong { margin-right: 6px; color: #aa8a54; }
@@ -43,6 +43,10 @@ button:disabled { cursor: not-allowed; }
   .runtime-notice, .error-banner { margin: 12px 16px 0; }
   .runtime-notice strong { display: block; }
   .loading-state { inset: 0; position: fixed; }
+}
+
+@media (min-width: 521px) and (max-width: 1180px) {
+  .workspace.inspector-open { margin-right: 334px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

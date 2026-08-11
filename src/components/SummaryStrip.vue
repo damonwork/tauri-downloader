@@ -27,4 +27,6 @@ defineProps<{ stats: DownloadStats; maxConcurrent: number }>();
 @keyframes pulse { 50% { transform: scaleY(.45); opacity:.4 } }
 @media (max-width: 920px) { .summary-strip { overflow-x: auto; }.speed-block { min-width: 220px; }.summary-metric { min-width: 125px; padding: 0 16px; } }
 @media (max-width: 760px) { .summary-strip { margin: 14px 16px 0; min-height: 67px; }.speed-block { min-width: 190px; padding: 0 16px; }.speed-block strong { font-size: 17px; }.summary-metric { min-width: 105px; }.metric-icon { display:none; } }
+@container workspace (max-width:920px){.summary-strip{overflow-x:auto}.speed-block{min-width:220px}.summary-metric{min-width:125px;padding:0 16px}}
+@container workspace (max-width:620px){.summary-strip{margin-left:16px;margin-right:16px;min-height:67px}.speed-block{min-width:190px;padding:0 16px}.speed-block strong{font-size:17px}.summary-metric{min-width:105px}.metric-icon{display:none}}
 </style>
