@@ -1,9 +1,7 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-release-${{ github.ref }}
@@ -29,8 +27,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Validate tag against package metadata
-        run: node scripts/check-version.mjs "${{ github.ref_name }}"
+      - name: Validate package metadata
+        run: node scripts/check-version.mjs
 
   build:
     name: ${{ matrix.name }}
@@ -116,8 +114,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Fluxor ${{ github.ref_name }}
+          tagName: v__VERSION__
+          releaseName: Fluxor v__VERSION__
           releaseBody: Descarga el instalador correspondiente a tu sistema desde los archivos adjuntos.
           releaseDraft: true
           prerelease: false

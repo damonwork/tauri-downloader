@@ -115,7 +115,7 @@ cargo test --locked --lib
 ## Integración continua
 
 - `quality.yaml` valida frontend, pruebas, versiones, formato Rust, Clippy y `cargo check`.
-- `release.yaml` se activa con tags `v*` y exige que el tag coincida con la versión del proyecto.
+- `release.yaml` se ejecuta manualmente desde GitHub Actions y crea el tag a partir de la versión del proyecto.
 - Windows genera instaladores NSIS `.exe` y MSI.
 - Linux genera AppImage y deb.
 - macOS genera DMG/app para Intel y Apple Silicon.
