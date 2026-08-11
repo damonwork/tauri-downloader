@@ -831,21 +831,32 @@ impl DownloadManager {
             let Ok(item) = find_download_mut(&mut state, id) else {
                 return Ok(());
             };
-            if !matches!(&item.state, DownloadState::Downloading { .. }) {
-                return Ok(());
-            }
             let identity_changed = (matches!(&item.transfer.validator, SourceValidator::None)
                 && !matches!(&progress.validator, SourceValidator::None))
                 || (matches!(&item.transfer.size, TransferSize::Unknown)
                     && matches!(&progress.size, TransferSize::Known { .. }));
-            item.transfer.downloaded_bytes = progress.downloaded_bytes;
-            item.transfer.size = progress.size;
-            item.transfer.validator = progress.validator;
-            item.transfer.resume = progress.resume;
-            item.telemetry = progress.telemetry;
-            item.state = DownloadState::Downloading {
-                speed_bytes: progress.speed_bytes,
-            };
+            let downloading = matches!(&item.state, DownloadState::Downloading { .. });
+            if !downloading && !identity_changed {
+                return Ok(());
+            }
+            if downloading {
+                item.transfer.downloaded_bytes = progress.downloaded_bytes;
+                item.transfer.size = progress.size;
+                item.transfer.validator = progress.validator;
+                item.transfer.resume = progress.resume;
+                item.telemetry = progress.telemetry;
+                item.state = DownloadState::Downloading {
+                    speed_bytes: progress.speed_bytes,
+                };
+            } else {
+                if matches!(&item.transfer.size, TransferSize::Unknown) {
+                    item.transfer.size = progress.size;
+                }
+                if matches!(&item.transfer.validator, SourceValidator::None) {
+                    item.transfer.validator = progress.validator;
+                }
+                item.transfer.resume = progress.resume;
+            }
             item.updated_at = Utc::now();
             let event_data = (
                 item.id.clone(),
@@ -1461,6 +1472,8 @@ async fn remove_partial_files(directory: &Path, file_name: &str) -> Result<(), A
         let segment = directory.join(format!(".{file_name}.fluxor.part.{index}"));
         remove_if_exists(&segment).await?;
     }
+    let metadata = directory.join(format!(".{file_name}.fluxor.segments.json"));
+    remove_if_exists(&metadata).await?;
     Ok(())
 }
 

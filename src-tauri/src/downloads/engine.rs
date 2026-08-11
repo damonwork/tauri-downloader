@@ -16,6 +16,7 @@ use reqwest::{
     redirect::Policy,
     Client, RequestBuilder, StatusCode,
 };
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::{
     fs::{self, File, OpenOptions},
@@ -150,12 +151,13 @@ impl DownloadEngine {
         let client = build_client(&input.proxy, &input.item.source)?;
         let single_partial = partial_path(&input.destination_dir, &input.item.file_name);
         if file_len(&single_partial).await? > 0 {
-            return run_single(
+            return fallback_to_single(
                 input,
                 client,
                 cancellation,
                 progress,
                 Some("Se encontró un parcial creado como flujo único".to_owned()),
+                false,
             )
             .await;
         }
@@ -178,23 +180,15 @@ impl DownloadEngine {
                 ..TransferTelemetry::default()
             },
         );
-        let probe = probe_source(&client, &input.item.source, &cancellation).await;
+        let probe = probe_source(&client, &input.item.source, &cancellation).await?;
 
         if let Some(probe) = probe.clone() {
-            let can_segment = probe.accepts_ranges
-                && input.item.threads > 1
-                && !matches!(&probe.validator, SourceValidator::None)
-                && matches!(&probe.size, TransferSize::Known { total_bytes } if *total_bytes >= MIN_SEGMENT_SIZE);
-            if can_segment {
-                ensure_same_source(
-                    u64::from(has_segment_partials),
-                    &input.item.transfer.validator,
-                    &probe.validator,
-                )?;
+            if supports_segmented_transfer(&probe, input.item.threads) {
                 let segmented = run_segmented(
                     input.clone(),
                     client.clone(),
                     probe,
+                    has_segment_partials,
                     cancellation.clone(),
                     progress.clone(),
                 )
@@ -202,21 +196,16 @@ impl DownloadEngine {
                 match segmented {
                     Ok(output) => return Ok(output),
                     Err(error) if segmented_failure_allows_single_stream(&error) => {
-                        remove_segment_partials(
-                            &input.destination_dir,
-                            &input.item.file_name,
-                            input.item.threads,
-                        )
-                        .await?;
-                        return run_single(
+                        return fallback_to_single(
                             input,
                             client,
                             cancellation,
                             progress,
                             Some(
-                                "El servidor rechazó la transferencia segmentada; se usa un flujo"
+                                "La transferencia segmentada no pudo continuar; se usa un flujo"
                                     .to_owned(),
                             ),
+                            true,
                         )
                         .await;
                     }
@@ -226,7 +215,15 @@ impl DownloadEngine {
         }
 
         if has_segment_partials {
-            return Err(EngineError::ResumeRejected);
+            return fallback_to_single(
+                input,
+                client,
+                cancellation,
+                progress,
+                Some("Los segmentos guardados ya no pueden continuar; se usa un flujo".to_owned()),
+                true,
+            )
+            .await;
         }
 
         let reason = single_stream_reason(probe.as_ref(), input.item.threads);
@@ -239,6 +236,15 @@ struct ProbeResult {
     size: TransferSize,
     validator: SourceValidator,
     accepts_ranges: bool,
+}
+
+#[derive(Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SegmentMetadata {
+    total_bytes: u64,
+    validator: SourceValidator,
+    threads: u8,
+    ranges: Vec<(u64, u64)>,
 }
 
 const SEGMENT_PENDING: u8 = 0;
@@ -359,14 +365,18 @@ async fn probe_source(
     client: &Client,
     source: &DownloadSource,
     cancellation: &CancellationToken,
-) -> Option<ProbeResult> {
-    let request = apply_source_headers(client.head(&source.url), source).ok()?;
+) -> Result<Option<ProbeResult>, EngineError> {
+    let request = apply_source_headers(client.head(&source.url), source)?;
     let response = tokio::select! {
-        _ = cancellation.cancelled() => return None,
-        response = request.send() => response.ok()?,
+        biased;
+        _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
+        response = request.send() => match response {
+            Ok(response) => response,
+            Err(_) => return Ok(None),
+        },
     };
     if !response.status().is_success() {
-        return None;
+        return Ok(None);
     }
     let size = response
         .headers()
@@ -377,11 +387,53 @@ async fn probe_source(
             total_bytes,
         });
     let accepts_ranges = accepts_ranges(response.headers());
-    Some(ProbeResult {
+    Ok(Some(ProbeResult {
         size,
         validator: response_validator(response.headers()),
         accepts_ranges,
-    })
+    }))
+}
+
+async fn confirm_segment_source(
+    client: &Client,
+    source: &DownloadSource,
+    mut probe: ProbeResult,
+    cancellation: &CancellationToken,
+) -> Result<ProbeResult, EngineError> {
+    let TransferSize::Known { total_bytes } = &probe.size else {
+        return Err(EngineError::InvalidContentRange);
+    };
+    let mut request =
+        apply_source_headers(client.get(&source.url), source)?.header(RANGE, "bytes=0-0");
+    request = apply_if_range(request, &probe.validator)?;
+    let mut response = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
+        response = request.send() => response.map_err(|_| EngineError::Request)?,
+    };
+    if response.status() != StatusCode::PARTIAL_CONTENT {
+        return Err(EngineError::ResumeRejected);
+    }
+    validate_content_range(response.headers(), 0, Some(0), Some(*total_bytes))?;
+    probe.validator =
+        confirmed_segment_validator(&probe.validator, response_validator(response.headers()))?;
+    let first_chunk = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
+        chunk = response.chunk() => chunk.map_err(|_| EngineError::Request)?,
+    };
+    if first_chunk.as_ref().is_none_or(|chunk| chunk.len() != 1) {
+        return Err(EngineError::InvalidContentRange);
+    }
+    let extra_chunk = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
+        chunk = response.chunk() => chunk.map_err(|_| EngineError::Request)?,
+    };
+    if extra_chunk.is_some() {
+        return Err(EngineError::InvalidContentRange);
+    }
+    Ok(probe)
 }
 
 fn single_stream_reason(probe: Option<&ProbeResult>, requested_threads: u8) -> String {
@@ -394,9 +446,6 @@ fn single_stream_reason(probe: Option<&ProbeResult>, requested_threads: u8) -> S
     if !probe.accepts_ranges {
         return "El servidor no admite solicitudes por rango".to_owned();
     }
-    if matches!(&probe.validator, SourceValidator::None) {
-        return "El servidor no proporciona un validador seguro".to_owned();
-    }
     match &probe.size {
         TransferSize::Unknown => "El servidor no informó el tamaño del archivo".to_owned(),
         TransferSize::Known { total_bytes } if *total_bytes < MIN_SEGMENT_SIZE => {
@@ -404,6 +453,69 @@ fn single_stream_reason(probe: Option<&ProbeResult>, requested_threads: u8) -> S
         }
         _ => "Se seleccionó un único flujo".to_owned(),
     }
+}
+
+fn supports_segmented_transfer(probe: &ProbeResult, requested_threads: u8) -> bool {
+    probe.accepts_ranges
+        && requested_threads > 1
+        && matches!(&probe.size, TransferSize::Known { total_bytes } if *total_bytes >= MIN_SEGMENT_SIZE)
+}
+
+fn ensure_segment_partials_compatible(
+    previous_size: &TransferSize,
+    current_size: &TransferSize,
+    previous_validator: &SourceValidator,
+    current_validator: &SourceValidator,
+) -> Result<(), EngineError> {
+    let validators_match = matches!(
+        (previous_validator, current_validator),
+        (SourceValidator::None, SourceValidator::None)
+    ) || previous_validator == current_validator;
+    if !validators_match {
+        return Err(EngineError::SourceChanged);
+    }
+    match (previous_size, current_size) {
+        (
+            TransferSize::Known {
+                total_bytes: previous,
+            },
+            TransferSize::Known {
+                total_bytes: current,
+            },
+        ) if previous == current => Ok(()),
+        _ => Err(EngineError::SourceChanged),
+    }
+}
+
+async fn fallback_to_single(
+    input: EngineInput,
+    client: Client,
+    cancellation: CancellationToken,
+    progress: watch::Sender<Option<EngineProgress>>,
+    reason: Option<String>,
+    discard_segments: bool,
+) -> Result<EngineOutput, EngineError> {
+    if cancellation.is_cancelled() {
+        return Err(EngineError::Cancelled);
+    }
+    let final_path = input.destination_dir.join(&input.item.file_name);
+    ensure_destination_available(&final_path).await?;
+    if discard_segments {
+        remove_segment_partials(
+            &input.destination_dir,
+            &input.item.file_name,
+            input.item.threads,
+        )
+        .await?;
+    }
+    let directory = input.destination_dir.clone();
+    let file_name = input.item.file_name.clone();
+    let threads = input.item.threads;
+    let output = run_single(input, client, cancellation, progress, reason).await?;
+    if !discard_segments {
+        let _ = remove_segment_partials(&directory, &file_name, threads).await;
+    }
+    Ok(output)
 }
 
 async fn run_single(
@@ -595,16 +707,72 @@ async fn run_single(
 async fn run_segmented(
     input: EngineInput,
     client: Client,
-    probe: ProbeResult,
+    mut probe: ProbeResult,
+    has_segment_partials: bool,
     cancellation: CancellationToken,
     progress: watch::Sender<Option<EngineProgress>>,
 ) -> Result<EngineOutput, EngineError> {
-    let TransferSize::Known { total_bytes } = probe.size else {
+    let TransferSize::Known { total_bytes } = &probe.size else {
         return Err(EngineError::InvalidContentRange);
     };
+    let total_bytes = *total_bytes;
     let final_path = input.destination_dir.join(&input.item.file_name);
     ensure_destination_available(&final_path).await?;
+    let metadata_path = segment_metadata_path(&input.destination_dir, &input.item.file_name);
     let ranges = split_ranges(total_bytes, input.item.threads);
+    let stored_metadata = if has_segment_partials {
+        read_segment_metadata(&metadata_path).await?
+    } else {
+        None
+    };
+    require_segment_metadata(has_segment_partials, stored_metadata.as_ref())?;
+    if stored_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.threads != input.item.threads || metadata.ranges != ranges)
+    {
+        return Err(EngineError::SourceChanged);
+    }
+    let (previous_size, previous_validator) = stored_metadata.as_ref().map_or_else(
+        || {
+            (
+                input.item.transfer.size.clone(),
+                input.item.transfer.validator.clone(),
+            )
+        },
+        |metadata| {
+            (
+                TransferSize::Known {
+                    total_bytes: metadata.total_bytes,
+                },
+                metadata.validator.clone(),
+            )
+        },
+    );
+    if has_segment_partials
+        && matches!(&probe.validator, SourceValidator::None)
+        && !matches!(&previous_validator, SourceValidator::None)
+    {
+        probe.validator = previous_validator.clone();
+    }
+    probe = confirm_segment_source(&client, &input.item.source, probe, &cancellation).await?;
+    if has_segment_partials {
+        ensure_segment_partials_compatible(
+            &previous_size,
+            &probe.size,
+            &previous_validator,
+            &probe.validator,
+        )?;
+    }
+    persist_segment_metadata(
+        &metadata_path,
+        &SegmentMetadata {
+            total_bytes,
+            validator: probe.validator.clone(),
+            threads: input.item.threads,
+            ranges: ranges.clone(),
+        },
+    )
+    .await?;
     let limiter = BandwidthLimiter::new(input.item.speed_limit_bytes);
     let mut tasks = JoinSet::new();
     let size = TransferSize::Known { total_bytes };
@@ -669,9 +837,20 @@ async fn run_segmented(
 
     while !tasks.is_empty() {
         tokio::select! {
+            biased;
             _ = cancellation.cancelled() => {
                 abort_segments(&mut tasks).await;
                 stop_active_segments(&runtimes);
+                let segments = snapshot_segments(&runtimes, &vec![0; runtimes.len()]);
+                send_progress(
+                    &progress,
+                    segments_downloaded(&segments),
+                    &size,
+                    &probe.validator,
+                    &resume,
+                    0,
+                    segmented_telemetry(TransferPhase::Idle, mode.clone(), segments),
+                );
                 return Err(EngineError::Cancelled);
             }
             _ = interval.tick() => {
@@ -765,6 +944,7 @@ async fn run_segmented(
         &cancellation,
     )
     .await?;
+    let _ = remove_segment_metadata(&metadata_path).await;
     send_progress(
         &progress,
         total_bytes,
@@ -842,9 +1022,10 @@ impl SegmentWorker {
             Some(self.end),
             Some(self.total_bytes),
         )?;
-        if response_validator(response.headers()) != self.validator {
-            return Err(EngineError::SourceChanged);
-        }
+        validate_segment_response_validator(
+            &self.validator,
+            &response_validator(response.headers()),
+        )?;
         self.runtime.set_state(SEGMENT_DOWNLOADING);
         let mut output = open_partial(&self.path, self.append).await?;
         let expected_bytes = self.end - self.start + 1;
@@ -978,6 +1159,29 @@ fn response_validator(headers: &reqwest::header::HeaderMap) -> SourceValidator {
         };
     }
     SourceValidator::None
+}
+
+fn confirmed_segment_validator(
+    expected: &SourceValidator,
+    observed: SourceValidator,
+) -> Result<SourceValidator, EngineError> {
+    if matches!(&observed, SourceValidator::None) {
+        return Ok(expected.clone());
+    }
+    if matches!(expected, SourceValidator::None) || expected == &observed {
+        return Ok(observed);
+    }
+    Err(EngineError::SourceChanged)
+}
+
+fn validate_segment_response_validator(
+    expected: &SourceValidator,
+    observed: &SourceValidator,
+) -> Result<(), EngineError> {
+    if matches!(observed, SourceValidator::None) || expected == observed {
+        return Ok(());
+    }
+    Err(EngineError::SourceChanged)
 }
 
 fn accepts_ranges(headers: &reqwest::header::HeaderMap) -> bool {
@@ -1263,6 +1467,48 @@ async fn file_len(path: &Path) -> Result<u64, EngineError> {
     }
 }
 
+async fn read_segment_metadata(path: &Path) -> Result<Option<SegmentMetadata>, EngineError> {
+    let bytes = match fs::read(path).await {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(EngineError::File(error)),
+    };
+    serde_json::from_slice(&bytes)
+        .map(Some)
+        .map_err(|_| EngineError::SourceChanged)
+}
+
+fn require_segment_metadata(
+    has_segment_partials: bool,
+    metadata: Option<&SegmentMetadata>,
+) -> Result<(), EngineError> {
+    if has_segment_partials && metadata.is_none() {
+        return Err(EngineError::SourceChanged);
+    }
+    Ok(())
+}
+
+async fn persist_segment_metadata(
+    path: &Path,
+    metadata: &SegmentMetadata,
+) -> Result<(), EngineError> {
+    let bytes = serde_json::to_vec(metadata).map_err(|error| {
+        EngineError::File(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    })?;
+    let mut file = File::create(path).await.map_err(EngineError::File)?;
+    file.write_all(&bytes).await.map_err(EngineError::File)?;
+    file.flush().await.map_err(EngineError::File)?;
+    file.sync_all().await.map_err(EngineError::File)
+}
+
+async fn remove_segment_metadata(path: &Path) -> Result<(), EngineError> {
+    match fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(EngineError::File(error)),
+    }
+}
+
 async fn has_segment_partials(
     directory: &Path,
     file_name: &str,
@@ -1289,13 +1535,17 @@ async fn remove_segment_partials(
             Err(error) => return Err(EngineError::File(error)),
         }
     }
-    Ok(())
+    remove_segment_metadata(&segment_metadata_path(directory, file_name)).await
 }
 
 fn segmented_failure_allows_single_stream(error: &EngineError) -> bool {
     matches!(
         error,
-        EngineError::ResumeRejected | EngineError::InvalidContentRange
+        EngineError::Request
+            | EngineError::HttpStatus(_)
+            | EngineError::ResumeRejected
+            | EngineError::SourceChanged
+            | EngineError::InvalidContentRange
     )
 }
 
@@ -1403,6 +1653,10 @@ fn verify_complete(downloaded: u64, size: &TransferSize) -> Result<(), EngineErr
 
 fn partial_path(directory: &Path, file_name: &str) -> PathBuf {
     directory.join(format!(".{file_name}.fluxor.part"))
+}
+
+fn segment_metadata_path(directory: &Path, file_name: &str) -> PathBuf {
+    directory.join(format!(".{file_name}.fluxor.segments.json"))
 }
 
 fn segment_path(directory: &Path, file_name: &str, index: usize) -> PathBuf {
@@ -1530,11 +1784,14 @@ mod tests {
     };
 
     use super::{
-        content_disposition_file_name, content_range_total, ensure_same_source,
-        file_name_from_response_url, merge_segments, response_validator, resume_support,
-        segmented_failure_allows_single_stream, segments_downloaded, segments_speed,
-        single_stream_reason, split_ranges, transfer_duration, validate_content_range, EngineError,
-        ProbeResult, ResumeSupport, SegmentRuntime, SegmentState, SourceValidator, TransferSize,
+        confirmed_segment_validator, content_disposition_file_name, content_range_total,
+        ensure_same_source, ensure_segment_partials_compatible, file_name_from_response_url,
+        merge_segments, persist_segment_metadata, read_segment_metadata, require_segment_metadata,
+        response_validator, resume_support, segmented_failure_allows_single_stream,
+        segments_downloaded, segments_speed, single_stream_reason, split_ranges,
+        supports_segmented_transfer, transfer_duration, validate_content_range,
+        validate_segment_response_validator, EngineError, ProbeResult, ResumeSupport,
+        SegmentMetadata, SegmentRuntime, SegmentState, SourceValidator, TransferSize,
         MIN_SEGMENT_SIZE, SEGMENT_DOWNLOADING,
     };
 
@@ -1582,6 +1839,109 @@ mod tests {
             accepts_ranges: true,
         };
         assert!(single_stream_reason(Some(&small), 8).contains("pequeño"));
+    }
+
+    #[test]
+    fn range_server_without_validator_can_use_segments() {
+        let mediafire_like = ProbeResult {
+            size: TransferSize::Known {
+                total_bytes: 262_430_628,
+            },
+            validator: SourceValidator::None,
+            accepts_ranges: true,
+        };
+
+        assert!(supports_segmented_transfer(&mediafire_like, 8));
+        assert!(!supports_segmented_transfer(&mediafire_like, 1));
+    }
+
+    #[test]
+    fn validatorless_segments_require_the_same_total_size_to_resume() {
+        let previous = TransferSize::Known { total_bytes: 100 };
+        let same = TransferSize::Known { total_bytes: 100 };
+        let changed = TransferSize::Known { total_bytes: 120 };
+
+        assert!(ensure_segment_partials_compatible(
+            &previous,
+            &same,
+            &SourceValidator::None,
+            &SourceValidator::None,
+        )
+        .is_ok());
+        assert!(matches!(
+            ensure_segment_partials_compatible(
+                &previous,
+                &changed,
+                &SourceValidator::None,
+                &SourceValidator::None,
+            ),
+            Err(EngineError::SourceChanged)
+        ));
+        assert!(matches!(
+            ensure_segment_partials_compatible(
+                &previous,
+                &same,
+                &SourceValidator::None,
+                &SourceValidator::Etag {
+                    value: "\"new\"".to_owned(),
+                },
+            ),
+            Err(EngineError::SourceChanged)
+        ));
+    }
+
+    #[test]
+    fn range_confirmation_establishes_and_workers_enforce_a_validator() {
+        let first = SourceValidator::Etag {
+            value: "\"v1\"".to_owned(),
+        };
+        let changed = SourceValidator::Etag {
+            value: "\"v2\"".to_owned(),
+        };
+
+        let established = confirmed_segment_validator(&SourceValidator::None, first.clone())
+            .expect("range confirmation should establish the validator");
+        assert_eq!(established, first);
+        assert!(matches!(
+            confirmed_segment_validator(&established, changed),
+            Err(EngineError::SourceChanged)
+        ));
+        assert!(
+            validate_segment_response_validator(&SourceValidator::None, &established,).is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn segment_metadata_is_synced_before_partials_are_reusable() {
+        let directory = std::env::temp_dir().join(format!("fluxor-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        let path = directory.join("segments.json");
+        let metadata = SegmentMetadata {
+            total_bytes: 262_430_628,
+            validator: SourceValidator::Etag {
+                value: "\"v1\"".to_owned(),
+            },
+            threads: 8,
+            ranges: split_ranges(262_430_628, 8),
+        };
+
+        persist_segment_metadata(&path, &metadata).await.unwrap();
+        let restored = read_segment_metadata(&path).await.unwrap().unwrap();
+
+        assert_eq!(restored.total_bytes, metadata.total_bytes);
+        assert_eq!(restored.validator, metadata.validator);
+        assert_eq!(restored.threads, metadata.threads);
+        assert_eq!(restored.ranges, metadata.ranges);
+        tokio::fs::remove_dir_all(directory).await.unwrap();
+    }
+
+    #[test]
+    fn segment_partials_without_metadata_are_rejected() {
+        assert!(matches!(
+            require_segment_metadata(true, None),
+            Err(EngineError::SourceChanged)
+        ));
+        assert!(require_segment_metadata(false, None).is_ok());
     }
 
     #[tokio::test]
@@ -1695,15 +2055,21 @@ mod tests {
     }
 
     #[test]
-    fn range_and_connection_failures_can_degrade_to_one_stream() {
+    fn remote_segment_failures_can_degrade_to_one_stream() {
         assert!(segmented_failure_allows_single_stream(
             &EngineError::ResumeRejected
         ));
-        assert!(!segmented_failure_allows_single_stream(
+        assert!(segmented_failure_allows_single_stream(
             &EngineError::Request
         ));
-        assert!(!segmented_failure_allows_single_stream(
+        assert!(segmented_failure_allows_single_stream(
             &EngineError::SourceChanged
+        ));
+        assert!(!segmented_failure_allows_single_stream(
+            &EngineError::DestinationExists
+        ));
+        assert!(!segmented_failure_allows_single_stream(
+            &EngineError::SegmentTask
         ));
     }
 

@@ -62,13 +62,19 @@ Un parcial solo puede anexarse cuando se cumplen estas condiciones:
 4. ETag o Last-Modified coincide cuando el servidor proporciona un validador.
 5. La cantidad final de bytes coincide con el tamaño conocido.
 
-Los cortes de red conservan los segmentos para reintentar. Solo un rechazo confirmado del
-protocolo de rangos activa la degradación a un flujo, evitando borrar progreso por un fallo transitorio.
+Las transferencias nuevas intentan usar segmentos cuando el servidor confirma rangos y tamaño,
+aunque no publique un validador. Un rechazo de rangos, una respuesta inconsistente o un fallo de
+red invalidan los segmentos y degradan automáticamente a un flujo. La cancelación, los errores de
+disco y los conflictos de destino no activan esta degradación ni eliminan esos parciales.
 
 La UI marca una descarga como reanudable cuando el servidor confirma rangos. ETag fuerte o
 Last-Modified añaden validación de identidad y se muestran por separado; un ETag débil no se usa
 con If-Range. Sin validador todavía se exige un `206`, un `Content-Range` exacto y un tamaño
-compatible antes de anexar el parcial.
+compatible antes de anexar el parcial. Si un GET por rango aporta un validador que HEAD omitió,
+se adopta para el intento y todas las conexiones que aporten uno deben coincidir. Antes de escribir
+segmentos, tamaño, cantidad de rangos y validador se sincronizan en un sidecar; así un cierre abrupto
+no permite reutilizar parciales con una identidad o geometría distinta. Si existen segmentos sin ese
+sidecar, se descartan y se inicia un flujo único.
 
 ## Persistencia
 
