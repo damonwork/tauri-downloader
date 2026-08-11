@@ -1,0 +1,41 @@
+# Rust / Cargo
+/target
+**/*.rs.bk
+Cargo.lock
+
+# Node / pnpm
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/
+
+# Sistema / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Entorno
+.env
+.env.local
+.env.*.local
+
+# Builds
+*.app
+*.dmg
+*.deb
+*.rpm
+*.exe
+*.msi
+*.AppImage
