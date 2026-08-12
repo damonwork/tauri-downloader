@@ -11,9 +11,10 @@ pub fn run() {
         .setup(|app| {
             let manager =
                 tauri::async_runtime::block_on(DownloadManager::load(app.handle().clone()))?;
-            let integration = tauri::async_runtime::block_on(
-                browser_bridge::start(app.handle().clone(), manager.clone()),
-            );
+            let integration = tauri::async_runtime::block_on(browser_bridge::start(
+                app.handle().clone(),
+                manager.clone(),
+            ));
             manager.clone().start_scheduler();
             app.manage(manager);
             app.manage(integration);

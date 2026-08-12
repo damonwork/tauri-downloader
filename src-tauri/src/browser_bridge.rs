@@ -1,13 +1,13 @@
 use std::{io, path::Path, sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     sync::Semaphore,
     time::timeout,
 };
-use tauri::{AppHandle, Manager};
 
 use crate::downloads::{
     error::AppError,
@@ -126,10 +126,7 @@ async fn handle_connection(
     token: &str,
 ) -> io::Result<()> {
     let mut request = read_request_head(&mut stream).await?;
-    let origin_allowed = request
-        .origin
-        .as_deref()
-        .map_or(true, is_extension_origin);
+    let origin_allowed = request.origin.as_deref().map_or(true, is_extension_origin);
     let token_allowed = request.token.as_deref() == Some(token);
     if !origin_allowed || (request.method != "OPTIONS" && !token_allowed) {
         let response = json_error(
