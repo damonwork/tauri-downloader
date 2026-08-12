@@ -68,7 +68,8 @@ nuevos contratos públicos ni añaden abstracciones sin una segunda implementaci
 - `DownloadManager` mantiene un límite global configurable de archivos activos.
 - Cada archivo configura un máximo de 1 a 32 segmentos; el motor usa menos según tamaño y soporte del servidor.
 - Cada segmento recibe un rango no solapado y escribe en su propio archivo parcial.
-- Si el servidor rechaza el protocolo de rangos, se descartan esos parciales y se continúa con un único flujo.
+- Una descarga nueva no escribe segmentos hasta que todas las conexiones entregan su primer bloque.
+  Si el servidor rechaza o serializa la concurrencia, se continúa con un único flujo sin perder avance.
 - El límite de velocidad se comparte entre todos los segmentos de una descarga, por lo que no se multiplica al aumentar conexiones.
 - `CancellationToken` coordina pausa, reinicio y borrado.
 - `RwLock` protege el snapshot; no se mantiene bloqueado durante red o disco.
@@ -92,9 +93,11 @@ Un parcial solo puede anexarse cuando se cumplen estas condiciones:
 5. La cantidad final de bytes coincide con el tamaño conocido.
 
 Las transferencias nuevas intentan usar segmentos cuando el servidor confirma rangos y tamaño,
-aunque no publique un validador. Un rechazo de rangos, una respuesta inconsistente o un fallo de
-red invalidan los segmentos y degradan automáticamente a un flujo. La cancelación, los errores de
-disco y los conflictos de destino no activan esta degradación ni eliminan esos parciales.
+aunque no publique un validador. Un rechazo inicial de rangos, una respuesta inconsistente o la
+imposibilidad de abrir todas las conexiones degradan automáticamente a un flujo. Una interrupción
+después de recibir datos conserva los segmentos y queda como fallo recuperable; al reintentar se
+reanuda cada rango desde su tamaño real en disco. Los parciales existentes nunca se eliminan por un
+fallo de red ni por pérdida posterior del soporte de rangos: ese caso exige un reinicio explícito.
 
 La UI marca una descarga como reanudable cuando el servidor confirma rangos. ETag fuerte o
 Last-Modified añaden validación de identidad y se muestran por separado; un ETag débil no se usa
@@ -103,7 +106,8 @@ compatible antes de anexar el parcial. Si un GET por rango aporta un validador q
 se adopta para el intento y todas las conexiones que aporten uno deben coincidir. Antes de escribir
 segmentos, tamaño, cantidad de rangos y validador se sincronizan en un sidecar; así un cierre abrupto
 no permite reutilizar parciales con una identidad o geometría distinta. Si existen segmentos sin ese
-sidecar, se descartan y se inicia un flujo único.
+sidecar, se conserva el diagnóstico y se exige un reinicio explícito en lugar de borrar datos
+silenciosamente.
 
 ## Persistencia
 

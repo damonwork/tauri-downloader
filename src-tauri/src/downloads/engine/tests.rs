@@ -331,19 +331,40 @@ fn final_response_url_is_percent_decoded() {
 #[test]
 fn remote_segment_failures_can_degrade_to_one_stream() {
     assert!(segmented_failure_allows_single_stream(
-        &EngineError::ResumeRejected
+        &EngineError::ResumeRejected,
+        false,
     ));
     assert!(segmented_failure_allows_single_stream(
-        &EngineError::Request
+        &EngineError::Request,
+        false,
+    ));
+    assert!(!segmented_failure_allows_single_stream(
+        &EngineError::SegmentInterrupted,
+        false,
+    ));
+    assert!(!segmented_failure_allows_single_stream(
+        &EngineError::Request,
+        true,
+    ));
+    assert!(!segmented_failure_allows_single_stream(
+        &EngineError::SourceChanged,
+        true,
     ));
     assert!(segmented_failure_allows_single_stream(
-        &EngineError::SourceChanged
+        &EngineError::SourceChanged,
+        false,
+    ));
+    assert!(segmented_failure_allows_single_stream(
+        &EngineError::SegmentHttpStatus(503),
+        false,
     ));
     assert!(!segmented_failure_allows_single_stream(
-        &EngineError::DestinationExists
+        &EngineError::DestinationExists,
+        false,
     ));
     assert!(!segmented_failure_allows_single_stream(
-        &EngineError::SegmentTask
+        &EngineError::SegmentTask,
+        false,
     ));
 }
 
@@ -351,6 +372,8 @@ fn remote_segment_failures_can_degrade_to_one_stream() {
 fn rejected_resume_requires_restart() {
     assert!(!EngineError::ResumeRejected.recoverable());
     assert!(EngineError::Request.recoverable());
+    assert!(EngineError::SegmentInterrupted.recoverable());
+    assert!(EngineError::SegmentHttpStatus(503).recoverable());
 }
 
 #[test]

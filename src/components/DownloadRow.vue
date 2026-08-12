@@ -5,8 +5,8 @@ import { progressOf } from "@/domain/download";
 import { formatBytes, formatEta, formatSpeed, hostOf, relativeTime } from "@/domain/format";
 import AppIcon from "./AppIcon.vue";
 
-const props = defineProps<{ item: DownloadItem; selected: boolean }>();
-const emit = defineEmits<{ select: []; action: [action: DownloadAction] }>();
+const props = defineProps<{ item: DownloadItem; selected: boolean; canReveal: boolean }>();
+const emit = defineEmits<{ select: []; action: [action: DownloadAction]; reveal: [] }>();
 
 const progress = computed(() => progressOf(props.item));
 const total = computed(() => props.item.transfer.size.kind === "known" ? props.item.transfer.size.totalBytes : undefined);
@@ -112,8 +112,9 @@ const primaryAction = computed<{ action: DownloadAction; icon: string; label: st
 
     <div class="row-actions" @click.stop>
       <button v-if="item.state.kind !== 'completed'" type="button" :disabled="controlsLocked" :aria-label="controlsLocked ? 'Finalizando archivo' : primaryAction.label" :title="controlsLocked ? 'La finalización no se puede interrumpir' : primaryAction.label" @click="emit('action', primaryAction.action)"><AppIcon :name="controlsLocked ? 'activity' : primaryAction.icon" :size="17" /></button>
-      <button type="button" aria-label="Eliminar" title="Eliminar" @click="emit('action', 'remove')"><AppIcon name="trash" :size="16" /></button>
-      <button type="button" aria-label="Ver detalles" title="Ver detalles" @click="emit('select')"><AppIcon name="chevron" :size="16" /></button>
+      <button v-else-if="canReveal" class="reveal-action" type="button" aria-label="Mostrar en carpeta" title="Mostrar en carpeta" @click="emit('reveal')"><AppIcon name="folder" :size="16" /></button>
+      <button class="delete-action" type="button" aria-label="Eliminar" title="Eliminar" @click="emit('action', 'remove')"><AppIcon name="trash" :size="16" /></button>
+      <button class="details-action" type="button" aria-label="Ver detalles" title="Ver detalles" @click="emit('select')"><AppIcon name="chevron" :size="16" /></button>
     </div>
   </article>
 </template>
@@ -125,8 +126,8 @@ const primaryAction = computed<{ action: DownloadAction; icon: string; label: st
 .state-chip { display: inline-flex; align-items: center; gap: 6px; color: #8a938f; font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }.state-chip i { width: 6px; height: 6px; border-radius: 50%; background: #69726e; }.state-chip.active { color: var(--accent); }.state-chip.active i { background: var(--accent); box-shadow:0 0 8px rgba(194,255,91,.4) }.state-chip.completed { color:#65cda5 }.state-chip.completed i { background:#65cda5 }.state-chip.failed { color:var(--danger) }.state-chip.failed i { background:var(--danger) }.state-chip.queued i { border:1px solid #77827c;background:transparent }.status-cell small { display:block;max-width:110px;margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#a97070;font-size:8px }.status-cell .resume-chip.supported{color:#65cda5}.status-cell .resume-chip.unknown{color:#717c76}.status-cell .resume-chip.unsupported{color:#d3a24d}
 .progress-head { display:flex;justify-content:space-between;margin-bottom:7px;font:9px var(--mono);color:#a8b1ad }.progress-head i { color:#7b8580;font-style:normal }.progress-head strong { color:#929d97;font-weight:500 }.track { height:3px;border-radius:3px;background:#252d2a;overflow:hidden }.track span { height:100%;display:block;background:#75817b;border-radius:3px;transition:width .4s ease }.track.active span { background:var(--accent);box-shadow:0 0 9px rgba(194,255,91,.28) }.track.completed span { background:#65cda5 }.track.failed span { background:var(--danger) }.track.indeterminate span{width:34%!important;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:indeterminate 1.2s ease-in-out infinite}@keyframes indeterminate{from{transform:translateX(-110%)}to{transform:translateX(300%)}}
 .transfer-cell strong,.transfer-cell small { display:block }.transfer-cell strong { font:11px var(--mono);color:#c0c8c4 }.transfer-cell small { margin-top:5px;color:#7f8a84;font-size:9px }.row-actions { display:flex;justify-content:flex-end;gap:4px }.row-actions button { width:29px;height:29px;border:1px solid transparent;border-radius:5px;background:transparent;color:#65706b;display:grid;place-items:center;cursor:pointer }.row-actions button:hover { border-color:#313b36;background:#19201d;color:var(--accent) }.row-actions button:disabled{color:#49534e;background:transparent;border-color:transparent}
-@media (max-width: 1100px) { .download-row { grid-template-columns:minmax(250px,1.3fr) minmax(180px,1fr) 105px 68px }.status-cell { display:none }.row-actions button:nth-child(2){display:none} }
-@media (max-width:760px) { .download-row { min-height:108px;grid-template-columns:1fr auto;grid-template-rows:auto auto;padding:14px 12px;gap:12px }.file-cell{grid-column:1}.progress-cell{grid-column:1/-1;grid-row:2}.transfer-cell{display:none}.row-actions{grid-column:2;grid-row:1}.row-actions button:nth-child(2){display:grid}.row-actions button:last-child{display:none} }
-@container workspace (max-width:1100px){.download-row{grid-template-columns:minmax(180px,1.3fr) minmax(130px,1fr) 90px 68px;gap:12px}.status-cell{display:none}.compact-state{display:inline}.row-actions button:nth-child(2){display:grid}.row-actions button:last-child{display:none}}
+@media (max-width: 1100px) { .download-row { grid-template-columns:minmax(250px,1.3fr) minmax(180px,1fr) 105px 68px }.status-cell { display:none }.reveal-action{display:none!important} }
+@media (max-width:760px) { .download-row { min-height:108px;grid-template-columns:1fr auto;grid-template-rows:auto auto;padding:14px 12px;gap:12px }.file-cell{grid-column:1}.progress-cell{grid-column:1/-1;grid-row:2}.transfer-cell{display:none}.row-actions{grid-column:2;grid-row:1}.delete-action{display:grid}.details-action{display:none} }
+@container workspace (max-width:1100px){.download-row{grid-template-columns:minmax(180px,1.3fr) minmax(130px,1fr) 90px 68px;gap:12px}.status-cell{display:none}.compact-state{display:inline}.reveal-action{display:none!important}.details-action{display:none}}
 @container workspace (max-width:650px){.download-row{min-height:108px;grid-template-columns:1fr auto;grid-template-rows:auto auto;padding:14px 12px;gap:12px}.file-cell{grid-column:1}.progress-cell{grid-column:1/-1;grid-row:2}.transfer-cell{display:none}.row-actions{grid-column:2;grid-row:1}.row-actions button:nth-child(2){display:grid}.row-actions button:last-child{display:none}}
 </style>

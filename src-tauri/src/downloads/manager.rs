@@ -128,6 +128,26 @@ impl DownloadManager {
         self.state.read().await.clone()
     }
 
+    pub async fn reveal_download(&self, id: &str) -> Result<(), AppError> {
+        let item = {
+            let state = self.state.read().await;
+            let item = find_download(&state, id)?;
+            if !matches!(&item.state, DownloadState::Completed { .. }) {
+                return Err(AppError::Validation(
+                    "Solo puedes abrir la ubicación de una descarga completada".to_owned(),
+                ));
+            }
+            item.clone()
+        };
+        let path = self.destination_dir(&item)?.join(&item.file_name);
+        if !tokio::fs::try_exists(&path).await? {
+            return Err(AppError::Validation(
+                "El archivo ya no existe en su ubicación de descarga".to_owned(),
+            ));
+        }
+        reveal_path(&path)
+    }
+
     pub async fn add(&self, mut input: CreateDownloadInput) -> Result<DownloadItem, AppError> {
         validate_source(&input.source)?;
         let (proxy, settings) = {
@@ -381,6 +401,26 @@ impl DownloadManager {
         }
         self.commit().await
     }
+}
+
+fn reveal_path(path: &std::path::Path) -> Result<(), AppError> {
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("explorer.exe")
+        .arg(format!("/select,{}", path.display()))
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open")
+        .arg(path.parent().unwrap_or(path))
+        .spawn();
+
+    result
+        .map(|_| ())
+        .map_err(|error| AppError::ExternalOpen(error.to_string()))
 }
 
 #[cfg(test)]

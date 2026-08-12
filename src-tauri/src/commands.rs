@@ -19,6 +19,14 @@ pub async fn get_snapshot(
 }
 
 #[tauri::command]
+pub async fn reveal_download(
+    manager: State<'_, Arc<DownloadManager>>,
+    id: String,
+) -> Result<(), AppError> {
+    manager.reveal_download(&id).await
+}
+
+#[tauri::command]
 pub async fn add_download(
     manager: State<'_, Arc<DownloadManager>>,
     input: CreateDownloadInput,

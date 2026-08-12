@@ -9,6 +9,7 @@ import type { AppSettings, AppSnapshot, ProxyProfile } from "@/domain/settings";
 
 export interface RuntimeCapabilities {
   runtime: "web" | "tauri";
+  canRevealDownloads: boolean;
 }
 
 export type SnapshotListener = (snapshot: AppSnapshot) => void;
@@ -18,6 +19,7 @@ export type Unlisten = () => void;
 export interface DownloadGateway {
   readonly capabilities: RuntimeCapabilities;
   snapshot(): Promise<AppSnapshot>;
+  revealDownload(id: string): Promise<void>;
   subscribe(listener: SnapshotListener, progressListener: ProgressListener): Promise<Unlisten>;
   add(input: CreateDownloadInput): Promise<DownloadItem>;
   control(id: string, action: DownloadAction): Promise<void>;

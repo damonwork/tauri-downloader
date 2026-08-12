@@ -27,7 +27,7 @@ type Confirmation = {
 };
 
 const manager = useDownloadManager(createDownloadGateway());
-const { snapshot, stats, loading, busy, lastError, capabilities } = manager;
+const { snapshot, stats, loading, initializationFailed, busy, lastError, capabilities } = manager;
 const filter = ref<Filter>("all");
 const search = ref("");
 const selectedId = ref<string>();
@@ -116,6 +116,10 @@ async function control(id: string, action: DownloadAction): Promise<void> {
   await manager.control(id, action);
 }
 
+async function revealDownload(id: string): Promise<void> {
+  await manager.revealDownload(id);
+}
+
 async function replaceSource(id: string, source: DownloadSource): Promise<void> {
   await manager.replaceSource(id, source);
 }
@@ -196,28 +200,41 @@ onBeforeUnmount(() => window.removeEventListener("keydown", keyboardShortcuts));
         <button type="button" aria-label="Ocultar aviso" @click="noticeVisible=false"><AppIcon name="close" :size="15" /></button>
       </div>
 
-      <div v-if="lastError.kind === 'message'" class="error-banner">
+      <div v-if="lastError.kind === 'message'" class="error-banner" role="alert">
         <AppIcon name="warning" :size="16" /><p>{{ lastError.message }}</p><button type="button" @click="lastError={kind:'none'}"><AppIcon name="close" :size="15" /></button>
       </div>
 
       <SummaryStrip :stats="stats" :max-concurrent="snapshot.settings.maxConcurrent" />
+      <div v-if="initializationFailed" class="connection-state">
+        <AppIcon name="warning" :size="25" />
+        <h2>No se pudo conectar con el motor</h2>
+        <p>La cola guardada no está disponible todavía. Tus descargas no se han eliminado.</p>
+        <button type="button" :disabled="loading" @click="manager.retryInit()">{{ loading ? 'Conectando…' : 'Reintentar conexión' }}</button>
+      </div>
       <DownloadList
+        v-else
         :items="filteredDownloads"
         :selected-id="selectedId"
         :filter-label="filterLabel"
+        :can-reveal="capabilities.canRevealDownloads"
+        :has-items="snapshot.downloads.length > 0"
+        :search-active="search.trim().length > 0"
         @select="selectedId=$event"
         @action="control"
+        @reveal="revealDownload"
         @add="showAdd=true"
       />
 
-      <div v-if="loading" class="loading-state"><span></span><p>Sincronizando el motor…</p></div>
+      <div v-if="loading && !initializationFailed" class="loading-state"><span></span><p>Sincronizando el motor…</p></div>
     </main>
 
     <DetailPanel
       v-if="selectedItem"
       :item="selectedItem"
+      :can-reveal="capabilities.canRevealDownloads"
       @close="selectedId=undefined"
       @action="control(selectedItem.id,$event)"
+      @reveal="revealDownload(selectedItem.id)"
       @replace="replaceSource(selectedItem.id,$event)"
     />
 

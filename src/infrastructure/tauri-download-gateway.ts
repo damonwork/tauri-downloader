@@ -19,10 +19,15 @@ import type { AppSettings, AppSnapshot, ProxyProfile } from "@/domain/settings";
 export class TauriDownloadGateway implements DownloadGateway {
   readonly capabilities: RuntimeCapabilities = {
     runtime: "tauri",
+    canRevealDownloads: true,
   };
 
   snapshot(): Promise<AppSnapshot> {
     return invoke("get_snapshot");
+  }
+
+  revealDownload(id: string): Promise<void> {
+    return invoke("reveal_download", { id });
   }
 
   async subscribe(listener: SnapshotListener, progressListener: ProgressListener): Promise<Unlisten> {

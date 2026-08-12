@@ -7,8 +7,8 @@ import { progressOf } from "@/domain/download";
 import AppIcon from "./AppIcon.vue";
 import SegmentMonitor from "./SegmentMonitor.vue";
 
-const props = defineProps<{ item: DownloadItem }>();
-const emit = defineEmits<{ close: []; action: [action: DownloadAction]; replace: [source: DownloadSource] }>();
+const props = defineProps<{ item: DownloadItem; canReveal: boolean }>();
+const emit = defineEmits<{ close: []; action: [action: DownloadAction]; reveal: []; replace: [source: DownloadSource] }>();
 const replacing = ref(false);
 const replacement = ref("");
 const replacementError = ref("");
@@ -83,6 +83,7 @@ function submitReplacement(): void {
       <div class="state-banner" :class="item.state.kind"><span>{{ stateLabel }}</span><p v-if="item.state.kind === 'failed'">{{ item.state.message }}</p><p v-else>{{ item.telemetry.phase === 'idle' ? resumeMeta.detail : '' }}</p></div>
       <div class="hero-progress" :class="{ indeterminate: progressIndeterminate }"><div><strong>{{ progressLabel }}</strong><span>{{ formatBytes(item.transfer.downloadedBytes) }}<template v-if="progressKnown"> / {{ formatBytes(total) }}</template></span></div><div class="track" :role="progressKnown ? 'progressbar' : undefined" :aria-label="progressKnown ? `Progreso de ${item.fileName}` : undefined" :aria-valuemin="progressKnown ? 0 : undefined" :aria-valuemax="progressKnown ? 100 : undefined" :aria-valuenow="progressKnown ? progressOf(item) : undefined"><i :style="{width:`${visualProgress}%`}"></i></div></div>
       <div class="detail-actions">
+        <button v-if="item.state.kind === 'completed' && canReveal" class="primary" type="button" @click="emit('reveal')"><AppIcon name="folder" :size="16" />Mostrar en carpeta</button>
         <button v-if="item.state.kind === 'downloading'" class="primary" type="button" :disabled="controlsLocked" @click="emit('action','pause')"><AppIcon :name="controlsLocked ? 'activity' : 'pause'" :size="16" />{{ controlsLocked ? 'Finalizando…' : 'Pausar' }}</button>
         <button v-else-if="item.state.kind !== 'completed'" class="primary" type="button" @click="emit('action',item.state.kind === 'failed' ? failedAction : pausedAction)"><AppIcon :name="item.state.kind === 'failed' || pausedAction === 'restart' ? 'refresh' : 'play'" :size="16" />{{ item.state.kind === 'failed' ? (failedAction === 'restart' ? 'Reiniciar' : 'Reintentar') : (pausedAction === 'restart' ? 'Reiniciar' : 'Reanudar') }}</button>
         <button v-if="item.state.kind !== 'completed'" type="button" :disabled="controlsLocked" @click="replacing = !replacing"><AppIcon name="link" :size="16" />Actualizar enlace</button>

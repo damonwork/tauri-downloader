@@ -15,6 +15,7 @@ const EMPTY_SNAPSHOT: AppSnapshot = {
 export function useDownloadManager(gateway: DownloadGateway) {
   const snapshot = ref<AppSnapshot>(structuredClone(EMPTY_SNAPSHOT));
   const loading = ref(true);
+  const initializationFailed = ref(false);
   const busy = ref(false);
   const lastError = ref<{ kind: "none" } | { kind: "message"; message: string }>({ kind: "none" });
   const progressRevisions = new Map<string, number>();
@@ -67,7 +68,10 @@ export function useDownloadManager(gateway: DownloadGateway) {
   }
 
   async function init(): Promise<void> {
+    loading.value = true;
+    initializationFailed.value = false;
     try {
+      unlisten?.();
       unlisten = await gateway.subscribe((next) => {
         applySnapshot(next);
       }, applyProgress);
@@ -75,6 +79,7 @@ export function useDownloadManager(gateway: DownloadGateway) {
       applySnapshot(initial);
     } catch (error) {
       lastError.value = { kind: "message", message: messageOf(error) };
+      initializationFailed.value = true;
     } finally {
       loading.value = false;
     }
@@ -97,6 +102,10 @@ export function useDownloadManager(gateway: DownloadGateway) {
 
   async function add(input: CreateDownloadInput): Promise<boolean> {
     return execute(() => gateway.add(input));
+  }
+
+  async function revealDownload(id: string): Promise<boolean> {
+    return execute(() => gateway.revealDownload(id));
   }
 
   async function control(id: string, action: DownloadAction): Promise<boolean> {
@@ -129,11 +138,14 @@ export function useDownloadManager(gateway: DownloadGateway) {
     snapshot: shallowReadonly(snapshot),
     stats,
     loading: readonly(loading),
+    initializationFailed: readonly(initializationFailed),
     busy: readonly(busy),
     lastError,
     capabilities: gateway.capabilities,
     init,
+    retryInit: init,
     add,
+    revealDownload,
     control,
     replaceSource,
     updateSettings,

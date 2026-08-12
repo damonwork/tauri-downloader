@@ -16,6 +16,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
+            commands::reveal_download,
             commands::add_download,
             commands::control_download,
             commands::replace_download_source,

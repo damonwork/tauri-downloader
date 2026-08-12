@@ -1,15 +1,20 @@
 use std::{
     sync::{
-        atomic::{AtomicI64, AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering},
         Arc, Mutex as StdMutex,
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use chrono::{DateTime, Utc};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::{fs, sync::watch, task::JoinSet, time};
+use tokio::{
+    fs,
+    sync::{watch, Barrier},
+    task::JoinSet,
+    time,
+};
 use tokio_util::sync::CancellationToken;
 
 use super::http::{confirm_segment_source, ProbeResult};
@@ -38,6 +43,7 @@ pub(super) const SEGMENT_DOWNLOADING: u8 = 2;
 pub(super) const SEGMENT_COMPLETED: u8 = 3;
 const SEGMENT_FAILED: u8 = 4;
 const SEGMENT_STOPPED: u8 = 5;
+const SEGMENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -243,9 +249,13 @@ pub(super) async fn run_segmented(
         mode.clone(),
         initial,
     );
+    let startup_barrier = Arc::new(Barrier::new(workers.len().max(1)));
+    let startup_ready = Arc::new(AtomicBool::new(false));
     for worker in workers {
-        tasks.spawn(worker.run());
+        tasks.spawn(worker.run(Arc::clone(&startup_barrier), Arc::clone(&startup_ready)));
     }
+    let startup_deadline = time::sleep(SEGMENT_STARTUP_TIMEOUT);
+    tokio::pin!(startup_deadline);
 
     let mut interval = time::interval(PROGRESS_INTERVAL);
     interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
@@ -271,6 +281,17 @@ pub(super) async fn run_segmented(
                 let segments = snapshot_segments(&runtimes, &vec![0; runtimes.len()]);
                 publish_progress(&progress, segments_downloaded(&segments), &size, &probe.validator, &resume, 0, TransferPhase::Idle, mode.clone(), segments);
                 return Err(EngineError::Cancelled);
+            }
+            _ = &mut startup_deadline, if !startup_ready.load(Ordering::Acquire) => {
+                if startup_ready.load(Ordering::Acquire) {
+                    continue;
+                }
+                publish_stopped_segments(&mut tasks, &runtimes, &progress, &size, &probe.validator, &resume, &mode).await;
+                return Err(if has_segment_partials {
+                    EngineError::SegmentInterrupted
+                } else {
+                    EngineError::Request
+                });
             }
             _ = interval.tick() => {
                 let sampled_at = Instant::now();

@@ -176,8 +176,10 @@ impl DownloadManager {
             state.revision += 1;
             return Err(error);
         }
-        remove_partial_files(&directory, &removed.file_name).await?;
-        self.release_output(&removed).await?;
+        let cleanup_result = remove_partial_files(&directory, &removed.file_name).await;
+        let release_result = self.release_output(&removed).await;
+        cleanup_result?;
+        release_result?;
         self.scheduler.notify_one();
         Ok(())
     }

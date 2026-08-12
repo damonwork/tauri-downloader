@@ -50,10 +50,7 @@ pub(super) async fn merge_segments(
     Ok(())
 }
 
-pub(super) async fn open_partial(
-    path: &Path,
-    append: bool,
-) -> Result<BufWriter<File>, EngineError> {
+pub(super) async fn open_partial(path: &Path, append: bool) -> Result<File, EngineError> {
     let file = OpenOptions::new()
         .create(true)
         .write(true)
@@ -62,7 +59,7 @@ pub(super) async fn open_partial(
         .open(path)
         .await
         .map_err(EngineError::File)?;
-    Ok(BufWriter::new(file))
+    Ok(file)
 }
 
 pub(super) async fn file_len(path: &Path) -> Result<u64, EngineError> {

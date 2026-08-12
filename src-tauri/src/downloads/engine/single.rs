@@ -203,11 +203,7 @@ pub(super) async fn run_single(
         ),
     );
     output.flush().await.map_err(EngineError::File)?;
-    output
-        .get_ref()
-        .sync_all()
-        .await
-        .map_err(EngineError::File)?;
+    output.sync_all().await.map_err(EngineError::File)?;
     verify_complete(downloaded, &size)?;
     finalize_partial(&partial_path, &final_path).await?;
     let telemetry = single_telemetry(

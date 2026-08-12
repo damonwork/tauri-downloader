@@ -3,8 +3,8 @@ import type { DownloadAction, DownloadItem } from "@/domain/download";
 import DownloadRow from "./DownloadRow.vue";
 import AppIcon from "./AppIcon.vue";
 
-defineProps<{ items: DownloadItem[]; selectedId?: string; filterLabel: string }>();
-const emit = defineEmits<{ select: [id: string]; action: [id: string, action: DownloadAction]; add: [] }>();
+defineProps<{ items: DownloadItem[]; selectedId?: string; filterLabel: string; canReveal: boolean; hasItems: boolean; searchActive: boolean }>();
+const emit = defineEmits<{ select: [id: string]; action: [id: string, action: DownloadAction]; reveal: [id: string]; add: [] }>();
 </script>
 
 <template>
@@ -19,15 +19,17 @@ const emit = defineEmits<{ select: [id: string]; action: [id: string, action: Do
         :key="item.id"
         :item="item"
         :selected="item.id === selectedId"
+        :can-reveal="canReveal"
         @select="emit('select', item.id)"
         @action="emit('action', item.id, $event)"
+        @reveal="emit('reveal', item.id)"
       />
     </div>
     <div v-else class="empty-state">
       <span><AppIcon name="download" :size="27" /></span>
-      <h2>No hay descargas aquí</h2>
-      <p>Pega un enlace o importa un comando cURL para comenzar.</p>
-      <button type="button" @click="emit('add')"><AppIcon name="plus" :size="17" />Añadir descarga</button>
+      <h2>{{ hasItems ? "Sin resultados" : "No hay descargas aquí" }}</h2>
+      <p>{{ hasItems ? (searchActive ? "Prueba con otro nombre o dominio." : "No hay elementos en este filtro.") : "Pega un enlace o importa un comando cURL para comenzar." }}</p>
+      <button v-if="!hasItems" type="button" @click="emit('add')"><AppIcon name="plus" :size="17" />Añadir descarga</button>
     </div>
   </section>
 </template>

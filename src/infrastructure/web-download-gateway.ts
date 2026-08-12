@@ -26,6 +26,7 @@ const LEGACY_STORAGE_KEY = "fluxor.preview.snapshot.v1";
 export class WebDownloadGateway implements DownloadGateway {
   readonly capabilities: RuntimeCapabilities = {
     runtime: "web",
+    canRevealDownloads: false,
   };
 
   private state: AppSnapshot;
@@ -41,6 +42,10 @@ export class WebDownloadGateway implements DownloadGateway {
 
   async snapshot(): Promise<AppSnapshot> {
     return structuredClone(this.state);
+  }
+
+  async revealDownload(_id: string): Promise<void> {
+    throw new Error("Mostrar la carpeta está disponible en la aplicación de escritorio.");
   }
 
   async subscribe(listener: SnapshotListener, _progressListener: ProgressListener): Promise<Unlisten> {

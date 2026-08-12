@@ -67,6 +67,8 @@ pub enum EngineError {
     Request,
     #[error("El servidor devolvió un estado HTTP inesperado: {0}")]
     HttpStatus(u16),
+    #[error("El servidor rechazó temporalmente un segmento: HTTP {0}")]
+    SegmentHttpStatus(u16),
     #[error(
         "El servidor no respetó el rango solicitado; reinicia la descarga para evitar corrupción"
     )]
@@ -83,13 +85,19 @@ pub enum EngineError {
     File(#[source] std::io::Error),
     #[error("Uno de los segmentos de descarga falló")]
     SegmentTask,
+    #[error("La transferencia segmentada se interrumpió; reintenta para continuar")]
+    SegmentInterrupted,
 }
 
 impl EngineError {
     pub fn recoverable(&self) -> bool {
         matches!(
             self,
-            Self::Request | Self::HttpStatus(_) | Self::SegmentTask
+            Self::Request
+                | Self::HttpStatus(_)
+                | Self::SegmentHttpStatus(_)
+                | Self::SegmentTask
+                | Self::SegmentInterrupted
         )
     }
 }
@@ -173,7 +181,9 @@ impl DownloadEngine {
                 .await;
                 match segmented {
                     Ok(output) => return Ok(output),
-                    Err(error) if segmented_failure_allows_single_stream(&error) => {
+                    Err(error)
+                        if segmented_failure_allows_single_stream(&error, has_segment_partials) =>
+                    {
                         return fallback_to_single(
                             input,
                             client,
@@ -193,15 +203,11 @@ impl DownloadEngine {
         }
 
         if has_segment_partials {
-            return fallback_to_single(
-                input,
-                client,
-                cancellation,
-                progress,
-                Some("Los segmentos guardados ya no pueden continuar; se usa un flujo".to_owned()),
-                true,
-            )
-            .await;
+            return if probe.is_some() {
+                Err(EngineError::ResumeRejected)
+            } else {
+                Err(EngineError::SegmentInterrupted)
+            };
         }
 
         let reason = single_stream_reason(probe.as_ref(), input.item.threads);
@@ -260,15 +266,17 @@ fn ensure_segment_partials_compatible(
     }
 }
 
-fn segmented_failure_allows_single_stream(error: &EngineError) -> bool {
-    matches!(
-        error,
-        EngineError::Request
-            | EngineError::HttpStatus(_)
-            | EngineError::ResumeRejected
-            | EngineError::SourceChanged
-            | EngineError::InvalidContentRange
-    )
+fn segmented_failure_allows_single_stream(error: &EngineError, has_segment_partials: bool) -> bool {
+    !has_segment_partials
+        && matches!(
+            error,
+            EngineError::Request
+                | EngineError::HttpStatus(_)
+                | EngineError::SegmentHttpStatus(_)
+                | EngineError::ResumeRejected
+                | EngineError::SourceChanged
+                | EngineError::InvalidContentRange
+        )
 }
 
 fn send_progress(

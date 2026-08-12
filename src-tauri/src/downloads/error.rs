@@ -15,6 +15,8 @@ pub enum AppError {
     InvalidStore(#[source] serde_json::Error),
     #[error("No se pudo resolver el directorio de la aplicación")]
     AppDirectory,
+    #[error("No se pudo abrir la ubicación del archivo: {0}")]
+    ExternalOpen(String),
 }
 
 impl Serialize for AppError {
