@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
+import type { BrowserIntegration } from "@/application/download-gateway";
 import type { AppSettings, CategoryDirectories } from "@/domain/settings";
 import AppIcon from "./AppIcon.vue";
 import SpeedLimitInput from "./SpeedLimitInput.vue";
 
-const props = defineProps<{ open: boolean; settings: AppSettings; busy: boolean }>();
+const props = defineProps<{ open: boolean; settings: AppSettings; busy: boolean; browserIntegration: BrowserIntegration }>();
 const emit = defineEmits<{ close: []; save: [settings: AppSettings] }>();
 const form = reactive<AppSettings>(cloneSettings(props.settings));
 const activeSection = ref<"general" | "folders">("general");
@@ -69,6 +70,11 @@ function cloneSettings(settings: AppSettings): AppSettings {
                 <div class="setting-row"><div><strong>Límite de velocidad</strong><p>Tope agregado predeterminado para cada descarga.</p></div><SpeedLimitInput v-model="form.defaultSpeedLimitBytes" class="setting-speed" name="default-speed-limit" /></div>
                 <label class="toggle-row"><div><strong>Iniciar al añadir</strong><p>Las nuevas transferencias entran directamente en la cola.</p></div><input v-model="form.startImmediately" name="start-immediately" type="checkbox" /><i></i></label>
                 <div class="info-card"><AppIcon name="activity" :size="18" /><p><strong>Configuración individual</strong>Cada descarga puede sobrescribir categoría, destino, segmentos, proxy, cookies y headers desde el diálogo de alta.</p></div>
+                <div class="browser-card">
+                  <div><strong>Extensión del navegador</strong><p>Abre la extensión de Fluxor y pega este token para enviar descargas desde Chrome o Firefox.</p></div>
+                  <code v-if="browserIntegration.available">{{ browserIntegration.token }}</code>
+                  <p v-else class="browser-offline">El puente local no está disponible.</p>
+                </div>
               </section>
 
               <section v-else>

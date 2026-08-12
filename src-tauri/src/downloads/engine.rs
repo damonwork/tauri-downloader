@@ -135,6 +135,16 @@ impl DownloadEngine {
         recover_interrupted_finalization(&input.destination_dir, &input.item.file_name).await?;
 
         let client = build_client(&input.proxy, &input.item.source)?;
+        if input.item.source.force_single_stream {
+            return run_single(
+                input,
+                client,
+                cancellation,
+                progress,
+                Some("El enlace firmado solo autoriza una solicitud continua".to_owned()),
+            )
+            .await;
+        }
         let single_partial = partial_path(&input.destination_dir, &input.item.file_name);
         if file_len(&single_partial).await? > 0 {
             return fallback_to_single(
@@ -169,7 +179,11 @@ impl DownloadEngine {
         let probe = probe_source(&client, &input.item.source, &cancellation).await?;
 
         if let Some(probe) = probe.clone() {
-            if supports_segmented_transfer(&probe, input.item.threads) {
+            if supports_segmented_transfer(
+                &probe,
+                input.item.threads,
+                input.item.source.force_single_stream,
+            ) {
                 let segmented = run_segmented(
                     input.clone(),
                     client.clone(),
@@ -210,12 +224,23 @@ impl DownloadEngine {
             };
         }
 
-        let reason = single_stream_reason(probe.as_ref(), input.item.threads);
+        let reason = single_stream_reason(
+            probe.as_ref(),
+            input.item.threads,
+            input.item.source.force_single_stream,
+        );
         run_single(input, client, cancellation, progress, Some(reason)).await
     }
 }
 
-fn single_stream_reason(probe: Option<&ProbeResult>, requested_threads: u8) -> String {
+fn single_stream_reason(
+    probe: Option<&ProbeResult>,
+    requested_threads: u8,
+    force_single_stream: bool,
+) -> String {
+    if force_single_stream {
+        return "El enlace firmado solo autoriza una solicitud continua".to_owned();
+    }
     if requested_threads <= 1 {
         return "Configurado para un único flujo".to_owned();
     }
@@ -234,8 +259,13 @@ fn single_stream_reason(probe: Option<&ProbeResult>, requested_threads: u8) -> S
     }
 }
 
-fn supports_segmented_transfer(probe: &ProbeResult, requested_threads: u8) -> bool {
-    probe.accepts_ranges
+fn supports_segmented_transfer(
+    probe: &ProbeResult,
+    requested_threads: u8,
+    force_single_stream: bool,
+) -> bool {
+    !force_single_stream
+        && probe.accepts_ranges
         && requested_threads > 1
         && matches!(&probe.size, TransferSize::Known { total_bytes } if *total_bytes >= MIN_SEGMENT_SIZE)
 }

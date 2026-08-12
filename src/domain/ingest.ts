@@ -147,7 +147,7 @@ export function parseRequest(input: string): ParsedRequest {
   if (URL_PATTERN.test(trimmed)) {
     const url = assertHttpUrl(trimmed);
     return {
-      source: { url, headers: [], cookies: [], proxy: { kind: "direct" } },
+      source: { url, headers: [], cookies: [], proxy: { kind: "direct" }, forceSingleStream: false },
       fileName: fileNameFromUrl(url),
       warnings: [],
     };
@@ -219,7 +219,7 @@ export function parseRequest(input: string): ParsedRequest {
   const url = assertHttpUrl(rawUrl);
   if (proxyUrl) warnings.push("Proxy detectado en cURL. Créalo como perfil para reutilizarlo.");
   return {
-    source: { url, headers, cookies, proxy: { kind: "direct" } },
+    source: { url, headers, cookies, proxy: { kind: "direct" }, forceSingleStream: false },
     fileName: fileNameFromUrl(url),
     warnings,
   };

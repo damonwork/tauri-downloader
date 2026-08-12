@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fluxor</title><link rel="stylesheet" href="popup.css"></head>
+<body>
+  <main>
+    <header><strong>FLUXOR</strong><span>Browser Companion</span></header>
+    <label>Token de conexión<input id="token" type="password" autocomplete="off" placeholder="Pégalo desde Preferencias de Fluxor"></label>
+    <div class="actions"><button id="test" type="button">Probar conexión</button><span id="status"></span></div>
+    <label class="toggle"><input id="autoCapture" type="checkbox"><span>Capturar descargas del navegador</span></label>
+    <label class="toggle"><input id="overlay" type="checkbox"><span>Mostrar botón sobre vídeos</span></label>
+    <button id="save" class="primary" type="button">Guardar configuración</button>
+    <section><h2>Últimas capturas</h2><ul id="candidates"></ul></section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -7,7 +7,7 @@ const MIN_SEGMENT_SIZE = 2 * 1024 * 1024;
 
 export function demoSnapshot(): AppSnapshot {
   const now = Date.now();
-  const source = (url: string): DownloadSource => ({ url, headers: [], cookies: [], proxy: { kind: "direct" } });
+  const source = (url: string): DownloadSource => ({ url, headers: [], cookies: [], proxy: { kind: "direct" }, forceSingleStream: false });
   const activeTelemetry = demoSegmentedTelemetry(3_842_000_000, [0.86, 0.72, 0, 0.66, 0.59, 0.48, 1, 0.31], 18_700_000);
   activeTelemetry.segments[2].state = "connecting";
   activeTelemetry.segments[2].speedBytes = 0;
@@ -72,6 +72,7 @@ export function previewSource(source: DownloadSource): DownloadSource {
     headers: [],
     cookies: [],
     proxy: structuredClone(source.proxy),
+    forceSingleStream: source.forceSingleStream ?? false,
   };
 }
 

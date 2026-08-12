@@ -9,7 +9,7 @@ function item(id: string): DownloadItem {
     fileName: `${id}.zip`,
     category: "archive",
     state: { kind: "downloading", speedBytes: 10 },
-    source: { url: `https://example.com/${id}.zip`, headers: [], cookies: [], proxy: { kind: "direct" } },
+    source: { url: `https://example.com/${id}.zip`, headers: [], cookies: [], proxy: { kind: "direct" }, forceSingleStream: false },
     destination: "Fluxor",
     transfer: { downloadedBytes: 10, size: { kind: "known", totalBytes: 100 }, validator: { kind: "none" }, resume: { kind: "unknown" } },
     telemetry: structuredClone(EMPTY_TRANSFER_TELEMETRY),

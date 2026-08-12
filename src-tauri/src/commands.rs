@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tauri::State;
 
+use crate::browser_bridge::BrowserIntegration;
 use crate::downloads::{
     error::AppError,
     manager::DownloadManager,
@@ -16,6 +17,13 @@ pub async fn get_snapshot(
     manager: State<'_, Arc<DownloadManager>>,
 ) -> Result<AppSnapshot, AppError> {
     Ok(manager.snapshot().await)
+}
+
+#[tauri::command]
+pub fn get_browser_integration(
+    integration: State<'_, BrowserIntegration>,
+) -> BrowserIntegration {
+    integration.inner().clone()
 }
 
 #[tauri::command]

@@ -33,6 +33,8 @@ pub struct DownloadSource {
     pub headers: Vec<HeaderEntry>,
     pub cookies: Vec<CookieEntry>,
     pub proxy: ProxySelection,
+    #[serde(default)]
+    pub force_single_stream: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -205,6 +207,20 @@ pub struct CreateDownloadInput {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BrowserDownloadInput {
+    pub url: String,
+    pub file_name: Option<String>,
+    pub page_url: Option<String>,
+    pub referrer: Option<String>,
+    pub user_agent: Option<String>,
+    #[serde(default)]
+    pub cookies: Vec<CookieEntry>,
+    #[serde(default)]
+    pub force_single_stream: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum DownloadAction {
     Pause,
     Resume,
@@ -339,5 +355,6 @@ mod tests {
         assert!(matches!(item.transfer.resume, ResumeSupport::Unknown));
         assert!(matches!(item.telemetry.phase, TransferPhase::Idle));
         assert!(matches!(item.telemetry.mode, TransferMode::Pending));
+        assert!(!item.source.force_single_stream);
     }
 }

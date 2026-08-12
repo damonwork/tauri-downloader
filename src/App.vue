@@ -37,6 +37,7 @@ const showProxies = ref(false);
 const noticeVisible = ref(capabilities.runtime === "web");
 const confirmation = ref<Confirmation>();
 const confirming = ref(false);
+const browserIntegration = ref({ available: false, port: 17846, token: "" });
 
 const counts = computed(() => ({
   all: snapshot.value.downloads.length,
@@ -183,6 +184,7 @@ function keyboardShortcuts(event: KeyboardEvent): void {
 
 onMounted(async () => {
   window.addEventListener("keydown", keyboardShortcuts);
+  browserIntegration.value = await manager.browserIntegration();
   await manager.init();
 });
 onBeforeUnmount(() => window.removeEventListener("keydown", keyboardShortcuts));
@@ -247,7 +249,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", keyboardShortcuts));
       @close="showAdd=false"
       @submit="addDownload"
     />
-    <SettingsDialog :open="showSettings" :settings="snapshot.settings" :busy="busy" @close="showSettings=false" @save="saveSettings" />
+    <SettingsDialog :open="showSettings" :settings="snapshot.settings" :busy="busy" :browser-integration="browserIntegration" @close="showSettings=false" @save="saveSettings" />
     <ProxyDialog
       :open="showProxies"
       :profiles="snapshot.proxies"

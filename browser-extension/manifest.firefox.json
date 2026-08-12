@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Fluxor Browser Companion",
+  "version": "0.1.4",
+  "description": "Envía descargas y medios del navegador a Fluxor.",
+  "permissions": ["downloads", "storage", "webRequest"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1:17846/*"],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "fluxor-browser-companion@damonwork.github.io",
+      "strict_min_version": "109.0"
+    }
+  },
+  "action": {
+    "default_title": "Enviar a Fluxor",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ]
+}

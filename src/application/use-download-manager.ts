@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, readonly, ref, shallowReadonly } from "vue";
-import type { DownloadGateway, Unlisten } from "./download-gateway";
+import type { BrowserIntegration, DownloadGateway, Unlisten } from "./download-gateway";
 import type { AppSnapshot, AppSettings, ProxyProfile } from "@/domain/settings";
 import { DEFAULT_SETTINGS } from "@/domain/settings";
 import type { CreateDownloadInput, DownloadAction, DownloadProgressEvent, DownloadSource } from "@/domain/download";
@@ -104,6 +104,14 @@ export function useDownloadManager(gateway: DownloadGateway) {
     return execute(() => gateway.add(input));
   }
 
+  async function browserIntegration(): Promise<BrowserIntegration> {
+    try {
+      return await gateway.browserIntegration();
+    } catch {
+      return { available: false, port: 17846, token: "" };
+    }
+  }
+
   async function revealDownload(id: string): Promise<boolean> {
     return execute(() => gateway.revealDownload(id));
   }
@@ -145,6 +153,7 @@ export function useDownloadManager(gateway: DownloadGateway) {
     init,
     retryInit: init,
     add,
+    browserIntegration,
     revealDownload,
     control,
     replaceSource,

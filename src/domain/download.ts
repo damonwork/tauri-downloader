@@ -15,6 +15,7 @@ export interface DownloadSource {
   headers: HeaderEntry[];
   cookies: CookieEntry[];
   proxy: { kind: "direct" } | { kind: "profile"; profileId: string };
+  forceSingleStream: boolean;
 }
 
 export type TransferSize = { kind: "unknown" } | { kind: "known"; totalBytes: number };

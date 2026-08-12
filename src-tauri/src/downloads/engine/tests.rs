@@ -104,7 +104,7 @@ fn transfer_rate_uses_the_full_elapsed_time_after_a_delayed_tick() {
 
 #[test]
 fn single_stream_reason_explains_why_segments_are_not_used() {
-    assert!(single_stream_reason(None, 8).contains("confirmar"));
+    assert!(single_stream_reason(None, 8, false).contains("confirmar"));
     let small = ProbeResult {
         size: TransferSize::Known {
             total_bytes: MIN_SEGMENT_SIZE - 1,
@@ -114,7 +114,8 @@ fn single_stream_reason_explains_why_segments_are_not_used() {
         },
         accepts_ranges: true,
     };
-    assert!(single_stream_reason(Some(&small), 8).contains("pequeño"));
+    assert!(single_stream_reason(Some(&small), 8, false).contains("pequeño"));
+    assert!(single_stream_reason(Some(&small), 8, true).contains("firmado"));
 }
 
 #[test]
@@ -127,8 +128,9 @@ fn range_server_without_validator_can_use_segments() {
         accepts_ranges: true,
     };
 
-    assert!(supports_segmented_transfer(&mediafire_like, 8));
-    assert!(!supports_segmented_transfer(&mediafire_like, 1));
+    assert!(supports_segmented_transfer(&mediafire_like, 8, false));
+    assert!(!supports_segmented_transfer(&mediafire_like, 1, false));
+    assert!(!supports_segmented_transfer(&mediafire_like, 8, true));
 }
 
 #[test]

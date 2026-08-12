@@ -66,7 +66,11 @@ const pausedAction = computed<DownloadAction>(() =>
 function submitReplacement(): void {
   try {
     const parsed = parseRequest(replacement.value);
-    emit("replace", { ...parsed.source, proxy: props.item.source.proxy });
+    emit("replace", {
+      ...parsed.source,
+      proxy: props.item.source.proxy,
+      forceSingleStream: props.item.source.forceSingleStream,
+    });
     replacing.value = false;
     replacementError.value = "";
   } catch (error) {

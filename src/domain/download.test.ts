@@ -17,7 +17,7 @@ const baseItem: DownloadItem = {
   fileName: "file.zip",
   category: "archive",
   state: { kind: "queued" },
-  source: { url: "https://example.com/file.zip", headers: [], cookies: [], proxy: { kind: "direct" } },
+  source: { url: "https://example.com/file.zip", headers: [], cookies: [], proxy: { kind: "direct" }, forceSingleStream: false },
   destination: "Fluxor",
   transfer: { downloadedBytes: 25, size: { kind: "known", totalBytes: 100 }, validator: { kind: "none" }, resume: { kind: "unknown" } },
   telemetry: structuredClone(EMPTY_TRANSFER_TELEMETRY),

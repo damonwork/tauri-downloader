@@ -16,13 +16,15 @@ use super::{
     engine::{EngineError, ResolvedProxy},
     error::AppError,
     model::{
-        AppSettings, AppSnapshot, CreateDownloadInput, DownloadAction, DownloadCategory,
-        DownloadItem, DownloadProgressEvent, DownloadSource, DownloadState, ProxyHealth,
-        ProxyProfile, ProxySelection, ResumeSupport, RevisionEvent, SegmentState, SourceValidator,
-        TransferPhase, TransferProgress, TransferSize, TransferTelemetry,
+        AppSettings, AppSnapshot, BrowserDownloadInput, CreateDownloadInput, DownloadAction,
+        DownloadCategory, DownloadItem, DownloadProgressEvent, DownloadSource, DownloadState,
+        ProxyHealth, ProxyProfile, ProxySelection, ResumeSupport, RevisionEvent,
+        SegmentState, SourceValidator, TransferPhase, TransferProgress, TransferSize,
+        TransferTelemetry,
     },
 };
 
+mod browser;
 mod controls;
 mod files;
 mod jobs;
@@ -157,7 +159,10 @@ impl DownloadManager {
                 state.settings.clone(),
             )
         };
-        if !input.file_name_customized && needs_remote_file_name(&input.file_name) {
+        if !input.source.force_single_stream
+            && !input.file_name_customized
+            && needs_remote_file_name(&input.file_name)
+        {
             if let Some(detected) =
                 super::engine::DownloadEngine::detect_file_name(&input.source, &proxy).await
             {
@@ -213,6 +218,14 @@ impl DownloadManager {
         }
         self.scheduler.notify_one();
         Ok(item)
+    }
+
+    pub async fn add_from_browser(
+        &self,
+        input: BrowserDownloadInput,
+    ) -> Result<DownloadItem, AppError> {
+        let settings = self.state.read().await.settings.clone();
+        self.add(browser::create_input(input, &settings)).await
     }
 
     pub async fn control(&self, id: &str, action: DownloadAction) -> Result<(), AppError> {

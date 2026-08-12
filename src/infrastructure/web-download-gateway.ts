@@ -1,5 +1,6 @@
 import type {
   DownloadGateway,
+  BrowserIntegration,
   ProgressListener,
   RuntimeCapabilities,
   SnapshotListener,
@@ -42,6 +43,10 @@ export class WebDownloadGateway implements DownloadGateway {
 
   async snapshot(): Promise<AppSnapshot> {
     return structuredClone(this.state);
+  }
+
+  async browserIntegration(): Promise<BrowserIntegration> {
+    return { available: false, port: 17846, token: "" };
   }
 
   async revealDownload(_id: string): Promise<void> {

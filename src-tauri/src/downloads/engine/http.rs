@@ -100,7 +100,12 @@ pub(super) fn build_client(
     proxy: &ResolvedProxy,
     source: &DownloadSource,
 ) -> Result<Client, EngineError> {
-    let carries_credentials = !source.headers.is_empty() || !source.cookies.is_empty();
+    let carries_sensitive_headers = source.headers.iter().any(|header| {
+        !matches!(
+            header.name.trim().to_ascii_lowercase().as_str(),
+            "referer" | "user-agent"
+        )
+    });
     let mut default_headers = HeaderMap::new();
     default_headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
     let mut builder = Client::builder()
@@ -108,7 +113,7 @@ pub(super) fn build_client(
         .default_headers(default_headers)
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(45))
-        .redirect(if carries_credentials {
+        .redirect(if carries_sensitive_headers {
             Policy::none()
         } else {
             Policy::limited(MAX_REDIRECTS)

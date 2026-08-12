@@ -28,7 +28,7 @@ El repositorio contiene un MVP funcional:
 - [ ] Reintentos automáticos con backoff y clasificación de errores.
 - [ ] Verificación SHA-256 al completar.
 - [ ] Integración con el almacén seguro del sistema para secretos persistentes.
-- [ ] Extensión de navegador y captura del portapapeles.
+- [x] Extensión de navegador Chrome/Firefox con captura de descargas y medios.
 - [ ] Auto-update, bandeja del sistema y notificaciones nativas.
 
 ## Separación de capacidades
@@ -136,7 +136,7 @@ cargo test --locked --lib
 - Una respuesta reanudada debe ser `206` y coincidir con el rango exacto solicitado.
 - Pausar conserva los parciales; si el servidor no permite reanudar, la UI advierte que será necesario reiniciar.
 - Sin ETag o Last-Modified, un parcial solo se anexa tras confirmar `206`, rango exacto y tamaño compatible.
-- Las redirecciones se desactivan cuando la solicitud contiene cookies o headers personalizados.
+- Las redirecciones se desactivan cuando la solicitud contiene headers personalizados distintos de `Referer` o `User-Agent`; las cookies se eliminan automáticamente al cambiar de host.
 - Dos descargas no pueden reservar el mismo archivo de destino.
 - Los archivos se descargan como parciales ocultos y se renombran al finalizar.
 
@@ -151,4 +151,20 @@ seguro del sistema.
 2. Reintentos automáticos con backoff sin ocupar slots de concurrencia.
 3. Checksums, límites por host y rotación de proxies.
 4. Almacén seguro de credenciales y migraciones de persistencia.
-5. Extensión Chrome/Firefox, auto-update y releases multiplataforma.
+5. Auto-update y mejoras de distribución de la extensión.
+
+## Extensión del navegador
+
+El workflow de release adjunta `fluxor-extension-chrome-vX.Y.Z.zip` y
+`fluxor-extension-firefox-vX.Y.Z.zip` al borrador del release. La extensión usa
+WebExtensions compatibles con Chrome y Firefox: captura descargas del navegador,
+observa respuestas multimedia y puede añadir un botón sobre elementos `<video>`.
+
+Para conectarla, abre Preferencias en Fluxor, copia el token del puente local y
+pégalo en el popup de la extensión. El puente solo escucha en `127.0.0.1` y las
+operaciones de escritura requieren ese token.
+
+Chrome permite instalar el ZIP desde `chrome://extensions` activando el modo de
+desarrollador y usando "Cargar descomprimida" tras extraerlo. Firefox permite
+cargar el contenido temporalmente desde `about:debugging`; la instalación
+permanente requiere firmar el complemento mediante Mozilla Add-ons.

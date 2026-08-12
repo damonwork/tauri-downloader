@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Fluxor Browser Companion",
+  "version": "0.1.4",
+  "description": "Envía descargas y medios del navegador a Fluxor.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0yOF/CI6cGrXr0vOruuX4IBZGQoGo6yIrjg1WBDX4m6bB8ffJfSicvd73xZzudPQYGTfNr+vJpsGdU+ii6XJZSoYte/FebMG5NTE/StEUrpZRz9EusKbjmFYwHeJHUVArrEMPrQZATgJTUPkpZCHUTdpwwe/Wq9DCnlBQ8EL34vdfPSzsVjbsek7TZCAVthF+/z+gvIxPCCpHWx9t3k2X0ufj9Wtjel0H64rWSMijD1/qFNapJz1emWgyEjcQyzQl1wK8R7N6vQKI6telB7GCgB+ItNfc7DnIvPhQM8kJui5h8g2WLtD6cFdqPAhNgm1nqNrfZWSemQbWE/qGhiOVwIDAQAB",
+  "permissions": ["downloads", "storage", "webRequest"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1:17846/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "Enviar a Fluxor",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ]
+}

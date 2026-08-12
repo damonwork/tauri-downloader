@@ -12,6 +12,12 @@ export interface RuntimeCapabilities {
   canRevealDownloads: boolean;
 }
 
+export interface BrowserIntegration {
+  available: boolean;
+  port: number;
+  token: string;
+}
+
 export type SnapshotListener = (snapshot: AppSnapshot) => void;
 export type ProgressListener = (progress: DownloadProgressEvent) => void;
 export type Unlisten = () => void;
@@ -19,6 +25,7 @@ export type Unlisten = () => void;
 export interface DownloadGateway {
   readonly capabilities: RuntimeCapabilities;
   snapshot(): Promise<AppSnapshot>;
+  browserIntegration(): Promise<BrowserIntegration>;
   revealDownload(id: string): Promise<void>;
   subscribe(listener: SnapshotListener, progressListener: ProgressListener): Promise<Unlisten>;
   add(input: CreateDownloadInput): Promise<DownloadItem>;

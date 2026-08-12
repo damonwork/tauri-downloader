@@ -9,6 +9,7 @@
     "check:versions": "node scripts/check-version.mjs",
     "preview": "vite preview",
     "test": "vitest run",
+    "package:extension": "node scripts/package-extension.mjs all",
     "test:watch": "vitest",
     "tauri": "tauri"
   },
