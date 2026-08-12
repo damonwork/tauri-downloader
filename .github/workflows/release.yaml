@@ -127,8 +127,8 @@ jobs:
           name: ${{ matrix.artifactName }}
           path: ${{ matrix.artifactPath }}
           if-no-files-found: error
-           retention-days: 2
-           compression-level: 0
+          retention-days: 2
+          compression-level: 0
 
   extension:
     name: Browser extension
