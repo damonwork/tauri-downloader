@@ -1,4 +1,4 @@
-use std::{io, sync::Arc, time::Duration};
+use std::{io, path::Path, sync::Arc, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use tokio::{
@@ -7,6 +7,7 @@ use tokio::{
     sync::Semaphore,
     time::timeout,
 };
+use tauri::{AppHandle, Manager};
 
 use crate::downloads::{
     error::AppError,
@@ -18,6 +19,7 @@ pub const BROWSER_BRIDGE_PORT: u16 = 17_846;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_CONNECTIONS: usize = 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const TOKEN_FILE: &str = "browser-bridge.token";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,8 +43,14 @@ struct BridgeResponse<T> {
     error: Option<String>,
 }
 
-pub async fn start(manager: Arc<DownloadManager>) -> BrowserIntegration {
-    let token = uuid::Uuid::new_v4().simple().to_string();
+pub async fn start(app: AppHandle, manager: Arc<DownloadManager>) -> BrowserIntegration {
+    let token = match load_or_create_token(&app).await {
+        Ok(token) => token,
+        Err(error) => {
+            eprintln!("Fluxor browser bridge token unavailable: {error}");
+            return integration(false, String::new());
+        }
+    };
     let address = format!("127.0.0.1:{BROWSER_BRIDGE_PORT}");
     let listener = match TcpListener::bind(&address).await {
         Ok(listener) => listener,
@@ -80,16 +88,55 @@ fn integration(available: bool, token: String) -> BrowserIntegration {
     }
 }
 
+async fn load_or_create_token(app: &AppHandle) -> io::Result<String> {
+    let directory = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| io::Error::other(error.to_string()))?;
+    tokio::fs::create_dir_all(&directory).await?;
+    let path = directory.join(TOKEN_FILE);
+    if let Ok(token) = tokio::fs::read_to_string(&path).await {
+        let token = token.trim().to_owned();
+        if is_valid_token(&token) {
+            return Ok(token);
+        }
+    }
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    tokio::fs::write(&path, &token).await?;
+    set_private_permissions(&path).await?;
+    Ok(token)
+}
+
+fn is_valid_token(token: &str) -> bool {
+    token.len() == 32 && token.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+async fn set_private_permissions(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).await?;
+    }
+    Ok(())
+}
+
 async fn handle_connection(
     mut stream: TcpStream,
     manager: Arc<DownloadManager>,
     token: &str,
 ) -> io::Result<()> {
     let mut request = read_request_head(&mut stream).await?;
-    let origin_allowed = request.origin.as_deref().is_some_and(is_extension_origin);
+    let origin_allowed = request
+        .origin
+        .as_deref()
+        .map_or(true, is_extension_origin);
     let token_allowed = request.token.as_deref() == Some(token);
     if !origin_allowed || (request.method != "OPTIONS" && !token_allowed) {
-        let response = json_error(403, "Credenciales de extensión no autorizadas", None);
+        let response = json_error(
+            403,
+            "Token de Fluxor inválido o extensión no autorizada",
+            request.origin.as_deref(),
+        );
         stream.write_all(response.as_bytes()).await?;
         return stream.shutdown().await;
     }
@@ -306,5 +353,7 @@ mod tests {
         assert!(!denied.contains("Access-Control-Allow-Origin"));
         assert!(is_extension_origin("moz-extension://example"));
         assert!(!is_extension_origin("https://example.com"));
+        assert!(is_valid_token("0123456789abcdef0123456789abcdef"));
+        assert!(!is_valid_token("short"));
     }
 }
