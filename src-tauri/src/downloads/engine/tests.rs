@@ -21,8 +21,9 @@ use super::storage::{
 use super::{
     ensure_segment_partials_compatible, segmented_failure_allows_single_stream,
     single_stream_reason, supports_segmented_transfer, EngineError, ProbeResult, ResumeSupport,
-    SegmentState, SourceValidator, TransferSize, MIN_SEGMENT_SIZE,
+    SourceValidator, TransferSize, MIN_SEGMENT_SIZE,
 };
+use crate::downloads::model::SegmentState;
 
 #[test]
 fn split_ranges_covers_the_file_without_gaps() {

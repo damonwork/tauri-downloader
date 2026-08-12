@@ -44,13 +44,21 @@ modificar consumidores estables:
 
 - `engine/http.rs`: protocolo HTTP, headers, identidad y validación de rangos.
 - `engine/segments.rs`: planificación, workers y telemetría de transferencias segmentadas.
+- `engine/segments/worker.rs`: conexión, recepción y escritura de cada rango individual.
+- `engine/single.rs`: estrategia de flujo único, reanudación y fallback.
 - `engine/rate.rs`: límite y estimación suavizada de velocidad.
 - `engine/storage.rs`: parciales, sidecar, merge y finalización atómica.
 - `manager/controls.rs`: pausa, reanudación, reinicio y eliminación.
-- `manager/jobs.rs`: scheduler, ciclo de ejecución y aplicación de progreso.
+- `manager/jobs.rs`: scheduler y ciclo de ejecución de tareas.
+- `manager/progress.rs`: aplicación ordenada y persistencia periódica del progreso.
 - `manager/persistence.rs`: snapshots y reservas de archivos de salida.
-- `manager/validation.rs`: reglas puras de entrada, rutas, nombres y proxies.
+- `manager/validation.rs`: fachada interna de reglas puras de entrada.
+- `manager/validation/downloads.rs`: nombres, fuentes y reglas de nuevas descargas.
+- `manager/validation/configuration.rs`: ajustes, rutas, destinos y proxies.
 - `manager/files.rs`: reconciliación física y telemetría en reposo.
+
+La preview web mantiene el contrato del gateway en `web-download-gateway.ts` y concentra fixtures,
+normalización legacy y simulación de avance en `web-download-preview.ts`.
 
 Los módulos internos dependen de los modelos de dominio y de sus fachadas padre; no exponen
 nuevos contratos públicos ni añaden abstracciones sin una segunda implementación real.

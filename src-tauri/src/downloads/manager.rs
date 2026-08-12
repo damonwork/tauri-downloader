@@ -27,6 +27,7 @@ mod controls;
 mod files;
 mod jobs;
 mod persistence;
+mod progress;
 mod validation;
 
 use files::reset_live_telemetry;

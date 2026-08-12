@@ -1,5 +1,4 @@
 use std::{
-    path::PathBuf,
     sync::{
         atomic::{AtomicI64, AtomicU64, AtomicU8, Ordering},
         Arc, Mutex as StdMutex,
@@ -8,19 +7,16 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use reqwest::{header::RANGE, Client, StatusCode};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::{fs, io::AsyncWriteExt, sync::watch, task::JoinSet, time};
+use tokio::{fs, sync::watch, task::JoinSet, time};
 use tokio_util::sync::CancellationToken;
 
-use super::http::{
-    apply_if_range, apply_source_headers, confirm_segment_source, response_validator,
-    validate_content_range, validate_segment_response_validator, ProbeResult,
-};
+use super::http::{confirm_segment_source, ProbeResult};
 use super::rate::{BandwidthLimiter, TransferRateEstimator};
 use super::storage::{
-    ensure_destination_available, file_len, finalize_partial, merge_segments, open_partial,
-    partial_path, persist_segment_metadata, read_segment_metadata, remove_segment_metadata,
+    ensure_destination_available, file_len, finalize_partial, merge_segments, partial_path,
+    persist_segment_metadata, read_segment_metadata, remove_segment_metadata,
     require_segment_metadata, segment_metadata_path, segment_path,
 };
 use super::{
@@ -28,9 +24,13 @@ use super::{
     EngineProgress, MIN_SEGMENT_SIZE, PROGRESS_INTERVAL,
 };
 use crate::downloads::model::{
-    DownloadSource, ResumeSupport, SegmentProgress, SegmentState, SourceValidator, TransferMode,
-    TransferPhase, TransferSize, TransferTelemetry,
+    ResumeSupport, SegmentProgress, SegmentState, SourceValidator, TransferMode, TransferPhase,
+    TransferSize, TransferTelemetry,
 };
+
+mod worker;
+
+use worker::SegmentWorker;
 
 const SEGMENT_PENDING: u8 = 0;
 const SEGMENT_CONNECTING: u8 = 1;
@@ -350,86 +350,6 @@ pub(super) async fn run_segmented(
         resume,
         telemetry,
     })
-}
-
-struct SegmentWorker {
-    client: Client,
-    source: DownloadSource,
-    validator: SourceValidator,
-    total_bytes: u64,
-    path: PathBuf,
-    start: u64,
-    end: u64,
-    append: bool,
-    cancellation: CancellationToken,
-    limiter: BandwidthLimiter,
-    runtime: Arc<SegmentRuntime>,
-}
-
-impl SegmentWorker {
-    async fn run(self) -> Result<(), EngineError> {
-        let runtime = Arc::clone(&self.runtime);
-        runtime.set_state(SEGMENT_CONNECTING);
-        let result = self.transfer().await;
-        match &result {
-            Ok(()) => runtime.set_state(SEGMENT_COMPLETED),
-            Err(EngineError::Cancelled) => runtime.set_state(SEGMENT_STOPPED),
-            Err(error) => runtime.mark_failed(error.to_string()),
-        }
-        result
-    }
-
-    async fn transfer(self) -> Result<(), EngineError> {
-        let mut request = apply_source_headers(self.client.get(&self.source.url), &self.source)?
-            .header(RANGE, format!("bytes={}-{}", self.start, self.end));
-        request = apply_if_range(request, &self.validator)?;
-        let mut response = tokio::select! {
-            _ = self.cancellation.cancelled() => return Err(EngineError::Cancelled),
-            response = request.send() => response.map_err(|_| EngineError::Request)?,
-        };
-        if response.status() != StatusCode::PARTIAL_CONTENT {
-            return Err(EngineError::ResumeRejected);
-        }
-        validate_content_range(
-            response.headers(),
-            self.start,
-            Some(self.end),
-            Some(self.total_bytes),
-        )?;
-        validate_segment_response_validator(
-            &self.validator,
-            &response_validator(response.headers()),
-        )?;
-        self.runtime.set_state(SEGMENT_DOWNLOADING);
-        let mut output = open_partial(&self.path, self.append).await?;
-        let expected_bytes = self.end - self.start + 1;
-        let mut received_bytes = 0_u64;
-        loop {
-            let next = tokio::select! {
-                _ = self.cancellation.cancelled() => return Err(EngineError::Cancelled),
-                chunk = response.chunk() => chunk.map_err(|_| EngineError::Request)?,
-            };
-            let Some(chunk) = next else { break };
-            self.limiter
-                .acquire(chunk.len(), &self.cancellation)
-                .await?;
-            received_bytes += chunk.len() as u64;
-            if received_bytes > expected_bytes {
-                return Err(EngineError::InvalidContentRange);
-            }
-            output.write_all(&chunk).await.map_err(EngineError::File)?;
-            self.runtime.mark_activity(chunk.len() as u64);
-        }
-        if received_bytes != expected_bytes {
-            return Err(EngineError::Request);
-        }
-        output.flush().await.map_err(EngineError::File)?;
-        output
-            .get_ref()
-            .sync_data()
-            .await
-            .map_err(EngineError::File)
-    }
 }
 
 async fn publish_stopped_segments(
