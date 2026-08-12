@@ -65,11 +65,7 @@ pub async fn start(manager: Arc<DownloadManager>) -> BrowserIntegration {
             let token = token.clone();
             tauri::async_runtime::spawn(async move {
                 let _permit = permit;
-                let _ = timeout(
-                    REQUEST_TIMEOUT,
-                    handle_connection(stream, manager, &token),
-                )
-                .await;
+                let _ = timeout(REQUEST_TIMEOUT, handle_connection(stream, manager, &token)).await;
             });
         }
     });
@@ -90,10 +86,7 @@ async fn handle_connection(
     token: &str,
 ) -> io::Result<()> {
     let mut request = read_request_head(&mut stream).await?;
-    let origin_allowed = request
-        .origin
-        .as_deref()
-        .is_some_and(is_extension_origin);
+    let origin_allowed = request.origin.as_deref().is_some_and(is_extension_origin);
     let token_allowed = request.token.as_deref() == Some(token);
     if !origin_allowed || (request.method != "OPTIONS" && !token_allowed) {
         let response = json_error(403, "Credenciales de extensión no autorizadas", None);

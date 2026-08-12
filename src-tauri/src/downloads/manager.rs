@@ -18,9 +18,8 @@ use super::{
     model::{
         AppSettings, AppSnapshot, BrowserDownloadInput, CreateDownloadInput, DownloadAction,
         DownloadCategory, DownloadItem, DownloadProgressEvent, DownloadSource, DownloadState,
-        ProxyHealth, ProxyProfile, ProxySelection, ResumeSupport, RevisionEvent,
-        SegmentState, SourceValidator, TransferPhase, TransferProgress, TransferSize,
-        TransferTelemetry,
+        ProxyHealth, ProxyProfile, ProxySelection, ResumeSupport, RevisionEvent, SegmentState,
+        SourceValidator, TransferPhase, TransferProgress, TransferSize, TransferTelemetry,
     },
 };
 

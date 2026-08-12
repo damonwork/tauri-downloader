@@ -20,9 +20,7 @@ pub async fn get_snapshot(
 }
 
 #[tauri::command]
-pub fn get_browser_integration(
-    integration: State<'_, BrowserIntegration>,
-) -> BrowserIntegration {
+pub fn get_browser_integration(integration: State<'_, BrowserIntegration>) -> BrowserIntegration {
     integration.inner().clone()
 }
 
