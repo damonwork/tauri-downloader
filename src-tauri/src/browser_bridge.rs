@@ -126,7 +126,7 @@ async fn handle_connection(
     token: &str,
 ) -> io::Result<()> {
     let mut request = read_request_head(&mut stream).await?;
-    let origin_allowed = request.origin.as_deref().map_or(true, is_extension_origin);
+    let origin_allowed = request.origin.as_deref().is_none_or(is_extension_origin);
     let token_allowed = request.token.as_deref() == Some(token);
     if !origin_allowed || (request.method != "OPTIONS" && !token_allowed) {
         let response = json_error(
