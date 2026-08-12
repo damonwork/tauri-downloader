@@ -38,6 +38,23 @@ Los comandos de `commands.rs` son adaptadores delgados. `DownloadManager` es la 
 la cola, tareas activas, cancelación y persistencia. `DownloadEngine` solo se ocupa de HTTP,
 rangos y archivos.
 
+Las fachadas `engine.rs` y `manager.rs` conservan los contratos usados por el resto de la
+aplicación. Sus detalles se dividen por responsabilidad para que un cambio local no obligue a
+modificar consumidores estables:
+
+- `engine/http.rs`: protocolo HTTP, headers, identidad y validación de rangos.
+- `engine/segments.rs`: planificación, workers y telemetría de transferencias segmentadas.
+- `engine/rate.rs`: límite y estimación suavizada de velocidad.
+- `engine/storage.rs`: parciales, sidecar, merge y finalización atómica.
+- `manager/controls.rs`: pausa, reanudación, reinicio y eliminación.
+- `manager/jobs.rs`: scheduler, ciclo de ejecución y aplicación de progreso.
+- `manager/persistence.rs`: snapshots y reservas de archivos de salida.
+- `manager/validation.rs`: reglas puras de entrada, rutas, nombres y proxies.
+- `manager/files.rs`: reconciliación física y telemetría en reposo.
+
+Los módulos internos dependen de los modelos de dominio y de sus fachadas padre; no exponen
+nuevos contratos públicos ni añaden abstracciones sin una segunda implementación real.
+
 ## Concurrencia
 
 - `DownloadManager` mantiene un límite global configurable de archivos activos.
@@ -50,6 +67,10 @@ rangos y archivos.
 - `Mutex` protege únicamente el mapa pequeño de tareas activas.
 - Los bloques recibidos se escriben inmediatamente; nunca se acumula el archivo en memoria.
 - El progreso viaja por un canal no bloqueante y la persistencia se agrupa por revisiones.
+- La velocidad visible usa una media exponencial temporal sobre bytes confirmados por el motor;
+  conserva microparadas breves, decae ante inactividad y llega a cero solo ante un stall sostenido.
+- El agregado segmentado se calcula desde un único snapshot global, mientras cada segmento mantiene
+  su propio estimador para evitar mezclar contadores y velocidades de instantes distintos.
 - Las tareas en cancelación siguen ocupando un slot hasta cerrar sus archivos.
 
 ## Reanudación e identidad
