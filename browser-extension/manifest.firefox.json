@@ -3,7 +3,7 @@
   "name": "Fluxor Browser Companion",
   "version": "0.1.4",
   "description": "Envía descargas y medios del navegador a Fluxor.",
-  "permissions": ["downloads", "storage", "webRequest"],
+  "permissions": ["cookies", "downloads", "storage", "tabs", "webRequest"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:17846/*"],
   "background": {
     "scripts": ["background.js"],

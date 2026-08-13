@@ -1,6 +1,7 @@
 import type {
   DownloadGateway,
   BrowserIntegration,
+  DiagnosticSnapshot,
   ProgressListener,
   RuntimeCapabilities,
   SnapshotListener,
@@ -48,6 +49,12 @@ export class WebDownloadGateway implements DownloadGateway {
   async browserIntegration(): Promise<BrowserIntegration> {
     return { available: false, port: 17846, token: "" };
   }
+
+  async diagnosticLogs(): Promise<DiagnosticSnapshot> {
+    return { entries: [], maxEntries: 500 };
+  }
+
+  async clearDiagnosticLogs(): Promise<void> {}
 
   async revealDownload(_id: string): Promise<void> {
     throw new Error("Mostrar la carpeta está disponible en la aplicación de escritorio.");

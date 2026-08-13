@@ -5,6 +5,7 @@ import type { AppSettings, ProxyProfile } from "@/domain/settings";
 import { formatBytes, hostOf } from "@/domain/format";
 import { createDownloadGateway } from "@/infrastructure/runtime";
 import { useDownloadManager } from "@/application/use-download-manager";
+import type { DiagnosticSnapshot } from "@/application/download-gateway";
 import SideRail from "@/components/SideRail.vue";
 import TopBar from "@/components/TopBar.vue";
 import SummaryStrip from "@/components/SummaryStrip.vue";
@@ -38,6 +39,9 @@ const noticeVisible = ref(capabilities.runtime === "web");
 const confirmation = ref<Confirmation>();
 const confirming = ref(false);
 const browserIntegration = ref({ available: false, port: 17846, token: "" });
+const diagnostics = ref<DiagnosticSnapshot>({ entries: [], maxEntries: 500 });
+const diagnosticsLoading = ref(false);
+let diagnosticsTimer: number | undefined;
 
 const counts = computed(() => ({
   all: snapshot.value.downloads.length,
@@ -73,6 +77,14 @@ const filterLabel = computed(() => ({
 
 watch(() => snapshot.value.downloads, (downloads) => {
   if (selectedId.value && !downloads.some((item) => item.id === selectedId.value)) selectedId.value = undefined;
+});
+
+watch(showSettings, (open) => {
+  if (diagnosticsTimer !== undefined) window.clearInterval(diagnosticsTimer);
+  diagnosticsTimer = undefined;
+  if (!open) return;
+  void loadDiagnostics();
+  diagnosticsTimer = window.setInterval(() => void loadDiagnostics(), 3000);
 });
 
 async function addDownload(input: CreateDownloadInput): Promise<void> {
@@ -127,6 +139,20 @@ async function replaceSource(id: string, source: DownloadSource): Promise<void> 
 
 async function saveSettings(settings: AppSettings): Promise<void> {
   if (await manager.updateSettings(settings)) showSettings.value = false;
+}
+
+async function loadDiagnostics(): Promise<void> {
+  diagnosticsLoading.value = true;
+  try {
+    diagnostics.value = await manager.diagnosticLogs();
+  } finally {
+    diagnosticsLoading.value = false;
+  }
+}
+
+async function clearDiagnostics(): Promise<void> {
+  await manager.clearDiagnosticLogs();
+  await loadDiagnostics();
 }
 
 async function saveProxy(proxy: ProxyProfile): Promise<void> {
@@ -187,7 +213,10 @@ onMounted(async () => {
   browserIntegration.value = await manager.browserIntegration();
   await manager.init();
 });
-onBeforeUnmount(() => window.removeEventListener("keydown", keyboardShortcuts));
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", keyboardShortcuts);
+  if (diagnosticsTimer !== undefined) window.clearInterval(diagnosticsTimer);
+});
 </script>
 
 <template>
@@ -249,7 +278,18 @@ onBeforeUnmount(() => window.removeEventListener("keydown", keyboardShortcuts));
       @close="showAdd=false"
       @submit="addDownload"
     />
-    <SettingsDialog :open="showSettings" :settings="snapshot.settings" :busy="busy" :browser-integration="browserIntegration" @close="showSettings=false" @save="saveSettings" />
+    <SettingsDialog
+      :open="showSettings"
+      :settings="snapshot.settings"
+      :busy="busy"
+      :browser-integration="browserIntegration"
+      :diagnostics="diagnostics"
+      :diagnostics-loading="diagnosticsLoading"
+      @close="showSettings=false"
+      @save="saveSettings"
+      @refresh-diagnostics="loadDiagnostics"
+      @clear-diagnostics="clearDiagnostics"
+    />
     <ProxyDialog
       :open="showProxies"
       :profiles="snapshot.proxies"

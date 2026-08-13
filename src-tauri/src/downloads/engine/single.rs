@@ -18,8 +18,8 @@ use super::{
     send_progress, EngineError, EngineInput, EngineOutput, EngineProgress, PROGRESS_INTERVAL,
 };
 use crate::downloads::model::{
-    SegmentProgress, SegmentState, SourceValidator, TransferMode, TransferPhase, TransferSize,
-    TransferTelemetry,
+    ResumeSupport, SegmentProgress, SegmentState, SourceValidator, TransferMode, TransferPhase,
+    TransferSize, TransferTelemetry,
 };
 
 pub(super) async fn fallback_to_single(
@@ -66,8 +66,10 @@ pub(super) async fn run_single(
     let resume_at = file_len(&partial_path).await?;
 
     let mut request = apply_source_headers(client.get(&input.item.source.url), &input.item.source)?;
-    if resume_at > 0 {
+    if resume_at > 0 || input.item.source.force_single_stream {
         request = request.header(RANGE, format!("bytes={resume_at}-"));
+    }
+    if resume_at > 0 {
         request = apply_if_range(request, &input.item.transfer.validator)?;
     }
 
@@ -121,9 +123,15 @@ pub(super) async fn run_single(
     } else {
         validator
     };
-    let resume = resume_support(
-        response.status() == StatusCode::PARTIAL_CONTENT || accepts_ranges(response.headers()),
-    );
+    let resume = if resume_at > 0 || !input.item.source.force_single_stream {
+        resume_support(
+            response.status() == StatusCode::PARTIAL_CONTENT || accepts_ranges(response.headers()),
+        )
+    } else {
+        ResumeSupport::Unsupported {
+            reason: "El enlace firmado solo autoriza una solicitud continua".to_owned(),
+        }
+    };
     let size = response_size(response.headers(), resume_at);
     ensure_same_size(resume_at, &input.item.transfer.size, &size)?;
     let mut output = open_partial(&partial_path, resume_at > 0).await?;

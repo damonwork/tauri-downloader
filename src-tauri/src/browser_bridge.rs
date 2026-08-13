@@ -9,6 +9,7 @@ use tokio::{
     time::timeout,
 };
 
+use crate::diagnostics::{diagnostic_details, safe_url, DiagnosticLevel, Diagnostics};
 use crate::downloads::{
     error::AppError,
     manager::DownloadManager,
@@ -43,11 +44,24 @@ struct BridgeResponse<T> {
     error: Option<String>,
 }
 
-pub async fn start(app: AppHandle, manager: Arc<DownloadManager>) -> BrowserIntegration {
+pub async fn start(
+    app: AppHandle,
+    manager: Arc<DownloadManager>,
+    diagnostics: Arc<Diagnostics>,
+) -> BrowserIntegration {
     let token = match load_or_create_token(&app).await {
         Ok(token) => token,
         Err(error) => {
             eprintln!("Fluxor browser bridge token unavailable: {error}");
+            diagnostics
+                .record(
+                    DiagnosticLevel::Error,
+                    "browser_bridge",
+                    "token_unavailable",
+                    "No se pudo preparar el token del puente local.",
+                    diagnostic_details([("error", error.to_string())]),
+                )
+                .await;
             return integration(false, String::new());
         }
     };
@@ -56,11 +70,30 @@ pub async fn start(app: AppHandle, manager: Arc<DownloadManager>) -> BrowserInte
         Ok(listener) => listener,
         Err(error) => {
             eprintln!("Fluxor browser bridge unavailable on {address}: {error}");
+            diagnostics
+                .record(
+                    DiagnosticLevel::Error,
+                    "browser_bridge",
+                    "bind_failed",
+                    "No se pudo iniciar el puente local.",
+                    diagnostic_details([("address", address), ("error", error.to_string())]),
+                )
+                .await;
             return integration(false, String::new());
         }
     };
+    diagnostics
+        .record(
+            DiagnosticLevel::Info,
+            "browser_bridge",
+            "listening",
+            "El puente local está listo para recibir capturas.",
+            diagnostic_details([("address", address)]),
+        )
+        .await;
     let integration = integration(true, token.clone());
     let semaphore = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let last_rejection = Arc::new(std::sync::atomic::AtomicU64::new(0));
     tauri::async_runtime::spawn(async move {
         loop {
             let Ok((stream, _)) = listener.accept().await else {
@@ -70,10 +103,41 @@ pub async fn start(app: AppHandle, manager: Arc<DownloadManager>) -> BrowserInte
                 continue;
             };
             let manager = Arc::clone(&manager);
+            let diagnostics = Arc::clone(&diagnostics);
             let token = token.clone();
+            let last_rejection = Arc::clone(&last_rejection);
             tauri::async_runtime::spawn(async move {
                 let _permit = permit;
-                let _ = timeout(REQUEST_TIMEOUT, handle_connection(stream, manager, &token)).await;
+                match timeout(
+                    REQUEST_TIMEOUT,
+                    handle_connection(stream, manager, &token, diagnostics.clone(), last_rejection),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        diagnostics
+                            .record(
+                                DiagnosticLevel::Warning,
+                                "browser_bridge",
+                                "connection_failed",
+                                "Una conexión del navegador terminó con error.",
+                                diagnostic_details([("error", error.to_string())]),
+                            )
+                            .await;
+                    }
+                    Err(_) => {
+                        diagnostics
+                            .record(
+                                DiagnosticLevel::Warning,
+                                "browser_bridge",
+                                "connection_timeout",
+                                "Una conexión del navegador superó el tiempo límite.",
+                                Default::default(),
+                            )
+                            .await;
+                    }
+                }
             });
         }
     });
@@ -124,11 +188,37 @@ async fn handle_connection(
     mut stream: TcpStream,
     manager: Arc<DownloadManager>,
     token: &str,
+    diagnostics: Arc<Diagnostics>,
+    last_rejection: Arc<std::sync::atomic::AtomicU64>,
 ) -> io::Result<()> {
     let mut request = read_request_head(&mut stream).await?;
     let origin_allowed = request.origin.as_deref().is_none_or(is_extension_origin);
     let token_allowed = request.token.as_deref() == Some(token);
     if !origin_allowed || (request.method != "OPTIONS" && !token_allowed) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        if last_rejection
+            .swap(now, std::sync::atomic::Ordering::Relaxed)
+            .saturating_add(5_000)
+            <= now
+        {
+            diagnostics
+                .record(
+                    DiagnosticLevel::Warning,
+                    "browser_bridge",
+                    "authorization_rejected",
+                    "El puente rechazó una solicitud no autorizada.",
+                    diagnostic_details([
+                        ("method", request.method.clone()),
+                        ("path", request.path.clone()),
+                        ("originAllowed", origin_allowed.to_string()),
+                        ("tokenValid", token_allowed.to_string()),
+                    ]),
+                )
+                .await;
+        }
         let response = json_error(
             403,
             "Token de Fluxor inválido o extensión no autorizada",
@@ -151,8 +241,19 @@ async fn handle_connection(
             http_response(200, "application/json", &body, origin)
         }
         ("POST", "/v1/downloads") => match serde_json::from_slice::<BridgeRequest>(&request.body) {
-            Ok(request) => bridge_download(manager, request.input, origin).await,
-            Err(_) => json_error(400, "La solicitud no tiene un formato válido", origin),
+            Ok(request) => bridge_download(manager, request.input, origin, diagnostics).await,
+            Err(error) => {
+                diagnostics
+                    .record(
+                        DiagnosticLevel::Warning,
+                        "browser_bridge",
+                        "invalid_payload",
+                        "La extensión envió una captura con formato inválido.",
+                        diagnostic_details([("error", error.to_string())]),
+                    )
+                    .await;
+                json_error(400, "La solicitud no tiene un formato válido", origin)
+            }
         },
         _ => json_error(404, "Ruta no encontrada", origin),
     };
@@ -164,10 +265,67 @@ async fn bridge_download(
     manager: Arc<DownloadManager>,
     input: BrowserDownloadInput,
     origin: Option<&str>,
+    diagnostics: Arc<Diagnostics>,
 ) -> String {
+    let details = diagnostic_details([
+        ("url", safe_url(&input.url)),
+        (
+            "fileName",
+            input
+                .file_name
+                .clone()
+                .unwrap_or_else(|| "Sin nombre".to_owned()),
+        ),
+        ("cookieCount", input.cookies.len().to_string()),
+        ("hasReferrer", input.referrer.is_some().to_string()),
+        ("hasUserAgent", input.user_agent.is_some().to_string()),
+        ("forceSingleStream", input.force_single_stream.to_string()),
+    ]);
+    diagnostics
+        .record(
+            DiagnosticLevel::Info,
+            "browser_bridge",
+            "capture_received",
+            "Se recibió una captura desde la extensión.",
+            details,
+        )
+        .await;
     match manager.add_from_browser(input).await {
-        Ok(item) => json_success(item, origin),
-        Err(error) => json_app_error(error, origin),
+        Ok(item) => {
+            let details = diagnostic_details([
+                ("downloadId", item.id.clone()),
+                ("fileName", item.file_name.clone()),
+            ]);
+            let diagnostics = Arc::clone(&diagnostics);
+            tauri::async_runtime::spawn(async move {
+                diagnostics
+                    .record(
+                        DiagnosticLevel::Info,
+                        "browser_bridge",
+                        "download_created",
+                        "La captura se añadió a la cola de Fluxor.",
+                        details,
+                    )
+                    .await;
+            });
+            json_success(item, origin)
+        }
+        Err(error) => {
+            let details = diagnostic_details([("error", error.to_string())]);
+            let diagnostics = Arc::clone(&diagnostics);
+            tauri::async_runtime::spawn(async move {
+                diagnostics
+                    .record(
+                        DiagnosticLevel::Error,
+                        "browser_bridge",
+                        "download_rejected",
+                        "Fluxor no pudo añadir la captura a la cola.",
+                        details,
+                    )
+                    .await;
+            });
+            json_app_error(error, origin)
+        }
     }
 }
 

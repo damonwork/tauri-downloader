@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
-import type { BrowserIntegration } from "@/application/download-gateway";
+import type { BrowserIntegration, DiagnosticLevel, DiagnosticSnapshot } from "@/application/download-gateway";
 import type { AppSettings, CategoryDirectories } from "@/domain/settings";
 import AppIcon from "./AppIcon.vue";
 import SpeedLimitInput from "./SpeedLimitInput.vue";
 
-const props = defineProps<{ open: boolean; settings: AppSettings; busy: boolean; browserIntegration: BrowserIntegration }>();
-const emit = defineEmits<{ close: []; save: [settings: AppSettings] }>();
+const props = defineProps<{ open: boolean; settings: AppSettings; busy: boolean; browserIntegration: BrowserIntegration; diagnostics: DiagnosticSnapshot; diagnosticsLoading: boolean }>();
+const emit = defineEmits<{ close: []; save: [settings: AppSettings]; refreshDiagnostics: []; clearDiagnostics: [] }>();
 const form = reactive<AppSettings>(cloneSettings(props.settings));
-const activeSection = ref<"general" | "folders">("general");
+const activeSection = ref<"general" | "folders" | "diagnostics">("general");
 const tokenCopied = ref(false);
 const tokenCopyError = ref(false);
+const logLevel = ref<DiagnosticLevel>("info");
+const logsCopied = ref(false);
+const logsCopyError = ref(false);
+const levelRank: Record<DiagnosticLevel, number> = { debug: 0, info: 1, warning: 2, error: 3 };
+const levelLabel: Record<DiagnosticLevel, string> = { debug: "DEBUG", info: "INFO", warning: "AVISO", error: "ERROR" };
 const categoryFields: { key: keyof CategoryDirectories; label: string; description: string }[] = [
   { key: "video", label: "Videos", description: "MP4, MKV, MOV, WEBM" },
   { key: "archive", label: "Comprimidos", description: "ZIP, RAR, 7Z, TAR" },
@@ -24,6 +29,9 @@ const rootPreview = computed(() => rootIsAbsolute.value
   ? form.downloadDirectory
   : `Descargas / ${form.downloadDirectory}`,
 );
+const filteredDiagnostics = computed(() => props.diagnostics.entries.filter((entry) =>
+  levelRank[entry.level] >= levelRank[logLevel.value],
+));
 
 watch(() => props.open, (open) => {
   if (!open) return;
@@ -45,6 +53,25 @@ async function copyBrowserToken(): Promise<void> {
   } catch {
     tokenCopyError.value = true;
   }
+}
+
+async function copyDiagnosticLogs(): Promise<void> {
+  const text = filteredDiagnostics.value.map((entry) => {
+    const details = Object.keys(entry.details).length ? ` ${JSON.stringify(entry.details)}` : "";
+    return `${entry.at} [${levelLabel[entry.level]}] ${entry.scope}/${entry.event}: ${entry.message}${details}`;
+  }).join("\n") || "Sin eventos para el nivel seleccionado.";
+  try {
+    await navigator.clipboard.writeText(text);
+    logsCopied.value = true;
+    logsCopyError.value = false;
+  } catch {
+    logsCopyError.value = true;
+  }
+  window.setTimeout(() => { logsCopied.value = false; }, 1800);
+}
+
+function diagnosticTime(value: string): string {
+  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function cloneSettings(settings: AppSettings): AppSettings {
@@ -73,6 +100,7 @@ function cloneSettings(settings: AppSettings): AppSettings {
           <nav aria-label="Secciones de preferencias">
             <button type="button" :class="{ active: activeSection === 'general' }" @click="activeSection='general'"><AppIcon name="settings" :size="17" /><span><strong>General</strong><small>Motor y comportamiento</small></span></button>
             <button type="button" :class="{ active: activeSection === 'folders' }" @click="activeSection='folders'"><AppIcon name="folder" :size="17" /><span><strong>Carpetas</strong><small>Destino por categoría</small></span></button>
+            <button type="button" :class="{ active: activeSection === 'diagnostics' }" @click="activeSection='diagnostics'"><AppIcon name="activity" :size="17" /><span><strong>Diagnóstico</strong><small>Eventos y errores</small></span></button>
           </nav>
 
           <form @submit.prevent="submit">
@@ -101,7 +129,7 @@ function cloneSettings(settings: AppSettings): AppSettings {
                 </div>
               </section>
 
-              <section v-else>
+              <section v-else-if="activeSection === 'folders'">
                 <div class="section-heading"><span><AppIcon name="folder" :size="18" /></span><div><h3>Organización de archivos</h3><p>La raíz relativa se crea dentro de Descargas del sistema.</p></div></div>
                 <label class="root-field"><span>CARPETA PRINCIPAL</span><div><AppIcon name="folder" :size="16" /><input v-model="form.downloadDirectory" name="download-directory" placeholder="Fluxor o C:\\Mi ruta" /></div><small>Resultado: {{ rootPreview }}</small></label>
                 <label class="toggle-row organize-toggle"><div><strong>Organizar por categoría</strong><p>Crear automáticamente una subcarpeta según el tipo.</p></div><input v-model="form.organizeByCategory" name="organize-categories" type="checkbox" /><i></i></label>
@@ -109,9 +137,26 @@ function cloneSettings(settings: AppSettings): AppSettings {
                   <label v-for="field in categoryFields" :key="field.key"><span class="category-icon"><AppIcon name="folder" :size="15" /></span><span class="category-copy"><strong>{{ field.label }}</strong><small>{{ field.description }}</small></span><span class="path-prefix">/</span><input v-model="form.categoryDirectories[field.key]" :name="`folder-${field.key}`" :disabled="!form.organizeByCategory" /></label>
                 </div>
               </section>
+              <section v-else class="diagnostics-section">
+                <div class="section-heading"><span><AppIcon name="activity" :size="18" /></span><div><h3>Registro de diagnóstico</h3><p>Flujo del puente, la cola y las transferencias.</p></div></div>
+                <div class="diagnostic-toolbar">
+                  <label><span>NIVEL MÍNIMO</span><select v-model="logLevel"><option value="debug">Debug</option><option value="info">Info</option><option value="warning">Aviso</option><option value="error">Error</option></select></label>
+                  <div><button type="button" @click="emit('refreshDiagnostics')"><AppIcon name="refresh" :size="13" />{{ diagnosticsLoading ? 'Actualizando…' : 'Actualizar' }}</button><button type="button" @click="copyDiagnosticLogs"><AppIcon name="link" :size="13" />{{ logsCopied ? 'Copiado' : 'Copiar' }}</button><button class="danger" type="button" @click="emit('clearDiagnostics')"><AppIcon name="trash" :size="13" />Limpiar</button></div>
+                </div>
+                <p v-if="logsCopyError" class="diagnostic-copy-error">No se pudieron copiar los logs al portapapeles.</p>
+                <div class="diagnostic-summary"><span><i></i>{{ filteredDiagnostics.length }} eventos visibles</span><small>Se conservan hasta {{ diagnostics.maxEntries }} eventos. Tokens, cookies y firmas se excluyen.</small></div>
+                <div class="diagnostic-list" role="log" aria-label="Registro de diagnóstico">
+                  <article v-for="entry in filteredDiagnostics" :key="entry.id" :class="entry.level">
+                    <div><span>{{ levelLabel[entry.level] }}</span><time>{{ diagnosticTime(entry.at) }}</time><code>{{ entry.scope }}/{{ entry.event }}</code></div>
+                    <p>{{ entry.message }}</p>
+                    <dl v-if="Object.keys(entry.details).length"><template v-for="(value, key) in entry.details" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></template></dl>
+                  </article>
+                  <div v-if="!filteredDiagnostics.length" class="diagnostic-empty"><AppIcon name="activity" :size="22" /><strong>Sin eventos para este nivel</strong><p>Usa la extensión o inicia una descarga para generar actividad.</p></div>
+                </div>
+              </section>
             </div>
 
-            <footer><p v-if="activeSection === 'folders'"><AppIcon name="shield" :size="14" />Las rutas se validan antes de crear archivos.</p><div><button type="button" @click="emit('close')">Cancelar</button><button class="save" type="submit" :disabled="busy">{{ busy ? 'Guardando…' : 'Guardar cambios' }}</button></div></footer>
+            <footer><p v-if="activeSection === 'folders'"><AppIcon name="shield" :size="14" />Las rutas se validan antes de crear archivos.</p><p v-else-if="activeSection === 'diagnostics'"><AppIcon name="shield" :size="14" />Los datos sensibles no se incluyen en el registro.</p><div><button type="button" @click="emit('close')">{{ activeSection === 'diagnostics' ? 'Cerrar' : 'Cancelar' }}</button><button v-if="activeSection !== 'diagnostics'" class="save" type="submit" :disabled="busy">{{ busy ? 'Guardando…' : 'Guardar cambios' }}</button></div></footer>
           </form>
         </div>
       </section>

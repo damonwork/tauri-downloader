@@ -1,5 +1,5 @@
 import { computed, onBeforeUnmount, readonly, ref, shallowReadonly } from "vue";
-import type { BrowserIntegration, DownloadGateway, Unlisten } from "./download-gateway";
+import type { BrowserIntegration, DiagnosticSnapshot, DownloadGateway, Unlisten } from "./download-gateway";
 import type { AppSnapshot, AppSettings, ProxyProfile } from "@/domain/settings";
 import { DEFAULT_SETTINGS } from "@/domain/settings";
 import type { CreateDownloadInput, DownloadAction, DownloadProgressEvent, DownloadSource } from "@/domain/download";
@@ -112,6 +112,18 @@ export function useDownloadManager(gateway: DownloadGateway) {
     }
   }
 
+  async function diagnosticLogs(): Promise<DiagnosticSnapshot> {
+    try {
+      return await gateway.diagnosticLogs();
+    } catch {
+      return { entries: [], maxEntries: 500 };
+    }
+  }
+
+  async function clearDiagnosticLogs(): Promise<void> {
+    await gateway.clearDiagnosticLogs();
+  }
+
   async function revealDownload(id: string): Promise<boolean> {
     return execute(() => gateway.revealDownload(id));
   }
@@ -154,6 +166,8 @@ export function useDownloadManager(gateway: DownloadGateway) {
     retryInit: init,
     add,
     browserIntegration,
+    diagnosticLogs,
+    clearDiagnosticLogs,
     revealDownload,
     control,
     replaceSource,

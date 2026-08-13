@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type {
   DownloadGateway,
   BrowserIntegration,
+  DiagnosticSnapshot,
   ProgressListener,
   RuntimeCapabilities,
   SnapshotListener,
@@ -29,6 +30,14 @@ export class TauriDownloadGateway implements DownloadGateway {
 
   browserIntegration(): Promise<BrowserIntegration> {
     return invoke("get_browser_integration");
+  }
+
+  diagnosticLogs(): Promise<DiagnosticSnapshot> {
+    return invoke("get_diagnostic_logs");
+  }
+
+  clearDiagnosticLogs(): Promise<void> {
+    return invoke("clear_diagnostic_logs");
   }
 
   revealDownload(id: string): Promise<void> {

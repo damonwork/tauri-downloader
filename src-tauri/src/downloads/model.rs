@@ -209,9 +209,15 @@ pub struct CreateDownloadInput {
 #[serde(rename_all = "camelCase")]
 pub struct BrowserDownloadInput {
     pub url: String,
+    #[serde(default)]
     pub file_name: Option<String>,
+    #[serde(default)]
     pub page_url: Option<String>,
+    #[serde(default)]
+    pub page_title: Option<String>,
+    #[serde(default)]
     pub referrer: Option<String>,
+    #[serde(default)]
     pub user_agent: Option<String>,
     #[serde(default)]
     pub cookies: Vec<CookieEntry>,

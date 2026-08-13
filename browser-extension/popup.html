@@ -9,7 +9,17 @@
     <label class="toggle"><input id="autoCapture" type="checkbox"><span>Capturar descargas del navegador</span></label>
     <label class="toggle"><input id="overlay" type="checkbox"><span>Mostrar botón sobre vídeos</span></label>
     <button id="save" class="primary" type="button">Guardar configuración</button>
-    <section><h2>Últimas capturas</h2><ul id="candidates"></ul></section>
+    <section>
+      <div class="section-title"><h2>Últimas capturas</h2><button id="clearCandidates" type="button">Limpiar</button></div>
+      <ul id="candidates"></ul>
+    </section>
+    <section>
+      <div class="section-title"><h2>Diagnóstico</h2><div class="section-actions"><button id="copyLogs" type="button">Copiar</button><button id="clearLogs" type="button">Limpiar</button></div></div>
+      <label class="log-filter">Nivel mínimo<select id="logLevel"><option value="debug">Debug</option><option value="info" selected>Info</option><option value="warning">Aviso</option><option value="error">Error</option></select></label>
+      <p class="help">Los errores también aparecen en <code>chrome://extensions</code> → Fluxor → service worker.</p>
+      <p id="copyStatus" class="copy-status"></p>
+      <ul id="logs" class="logs"></ul>
+    </section>
   </main>
   <script src="popup.js"></script>
 </body>

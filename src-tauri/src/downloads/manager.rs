@@ -22,7 +22,6 @@ use super::{
         SourceValidator, TransferPhase, TransferProgress, TransferSize, TransferTelemetry,
     },
 };
-
 mod browser;
 mod controls;
 mod files;

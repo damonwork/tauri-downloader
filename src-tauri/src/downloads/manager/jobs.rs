@@ -1,6 +1,7 @@
 use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use chrono::Utc;
+use tauri::Manager;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -10,6 +11,7 @@ use super::{
     DownloadItem, DownloadManager, DownloadState, EngineError, JobFailure, ResolvedProxy,
     SegmentState, TaskControl, TransferPhase,
 };
+use crate::diagnostics::{diagnostic_details, safe_url, DiagnosticLevel, Diagnostics};
 use crate::downloads::engine::{DownloadEngine, EngineInput};
 
 impl DownloadManager {
@@ -189,6 +191,28 @@ impl DownloadManager {
     }
 
     async fn run_job(&self, id: String, input: EngineInput, cancellation: CancellationToken) {
+        let diagnostics = self.app.state::<Arc<Diagnostics>>().inner().clone();
+        let started_details = diagnostic_details([
+            ("downloadId", id.clone()),
+            ("fileName", input.item.file_name.clone()),
+            ("url", safe_url(&input.item.source.url)),
+            (
+                "forceSingleStream",
+                input.item.source.force_single_stream.to_string(),
+            ),
+        ]);
+        let started_diagnostics = Arc::clone(&diagnostics);
+        tauri::async_runtime::spawn(async move {
+            started_diagnostics
+                .record(
+                    DiagnosticLevel::Info,
+                    "transfer",
+                    "started",
+                    "Comenzó una transferencia.",
+                    started_details,
+                )
+                .await;
+        });
         let (sender, mut receiver) = watch::channel(None);
         let progress_guard = sender.clone();
         let transfer = DownloadEngine::run(input, cancellation, sender);
@@ -225,8 +249,13 @@ impl DownloadManager {
 
         let mut cancelled = false;
         let mut failed = false;
-        match result {
+        let outcome_details = match result {
             Ok(output) => {
+                let details = diagnostic_details([
+                    ("downloadId", id.clone()),
+                    ("downloadedBytes", output.downloaded_bytes.to_string()),
+                    ("mode", format!("{:?}", output.telemetry.mode)),
+                ]);
                 let mut state = self.state.write().await;
                 if let Ok(item) = find_download_mut(&mut state, &id) {
                     item.transfer.downloaded_bytes = output.downloaded_bytes;
@@ -240,8 +269,23 @@ impl DownloadManager {
                     item.updated_at = Utc::now();
                     state.revision += 1;
                 }
+                drop(state);
+                Some((
+                    DiagnosticLevel::Info,
+                    "completed",
+                    "La transferencia terminó correctamente.",
+                    details,
+                ))
             }
-            Err(JobFailure::Engine(EngineError::Cancelled)) => cancelled = true,
+            Err(JobFailure::Engine(EngineError::Cancelled)) => {
+                cancelled = true;
+                Some((
+                    DiagnosticLevel::Info,
+                    "cancelled",
+                    "La transferencia fue detenida.",
+                    diagnostic_details([("downloadId", id.clone())]),
+                ))
+            }
             Err(failure) => {
                 failed = true;
                 let (message, recoverable) = match failure {
@@ -252,7 +296,7 @@ impl DownloadManager {
                 if let Ok(item) = find_download_mut(&mut state, &id) {
                     if matches!(&item.state, DownloadState::Downloading { .. }) {
                         item.state = DownloadState::Failed {
-                            message,
+                            message: message.clone(),
                             recoverable,
                         };
                         item.telemetry.phase = TransferPhase::Idle;
@@ -271,7 +315,25 @@ impl DownloadManager {
                         state.revision += 1;
                     }
                 }
+                drop(state);
+                Some((
+                    DiagnosticLevel::Error,
+                    "failed",
+                    "La transferencia terminó con error.",
+                    diagnostic_details([
+                        ("downloadId", id.clone()),
+                        ("error", message),
+                        ("recoverable", recoverable.to_string()),
+                    ]),
+                ))
             }
+        };
+        if let Some((level, event, message, details)) = outcome_details {
+            tauri::async_runtime::spawn(async move {
+                diagnostics
+                    .record(level, "transfer", event, message, details)
+                    .await;
+            });
         }
         self.progress_persisted_at.lock().await.remove(&id);
         if cancelled {

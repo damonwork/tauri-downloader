@@ -46,19 +46,24 @@ function capture(video, button) {
       url,
       fileName: fileNameFromUrl(url),
       pageUrl: location.href,
+      pageTitle: document.title,
+      mediaType: "video",
       referrer: document.referrer,
       forceSingleStream: true,
     },
   }).then((result) => {
     button.dataset.state = result?.ok ? "" : "error";
-    button.textContent = result?.ok ? "Enviado a Fluxor" : "Configurar Fluxor";
+    button.title = result?.ok ? "Descarga enviada a Fluxor" : result?.error || "Error desconocido";
+    button.textContent = result?.ok ? "Enviado a Fluxor" : "Error al enviar";
     window.setTimeout(() => {
       button.textContent = "Descargar con Fluxor";
+      button.title = "";
       button.dataset.state = "";
     }, 2400);
-  }).catch(() => {
+  }).catch((error) => {
     button.dataset.state = "error";
-    button.textContent = "Configurar Fluxor";
+    button.title = error.message || "No se pudo contactar con la extensión";
+    button.textContent = "Error al enviar";
   });
 }
 
