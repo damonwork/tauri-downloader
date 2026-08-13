@@ -114,6 +114,7 @@ const MENU_ID = "fluxor-download-link";
 
 function installContextMenu() {
   api.contextMenus.remove(MENU_ID, () => {
+    void api.runtime.lastError;
     api.contextMenus.create({
       id: MENU_ID,
       title: "Descargar con Fluxor",
