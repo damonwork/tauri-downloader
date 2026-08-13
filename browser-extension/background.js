@@ -5,6 +5,7 @@ const MAX_LOGS = 80;
 const requestById = new Map();
 const recentByUrl = new Map();
 const queuedKeys = new Map();
+const lastMediaLog = new Map();
 let logQueue = Promise.resolve();
 
 const DEFAULTS = {
@@ -277,6 +278,7 @@ async function queueCandidate(candidate) {
       fileName: body.data?.fileName || fileName,
       url: diagnosticUrl(candidate.url),
     });
+    queuedKeys.set(key, Date.now());
     await setBadge("");
     return { ok: true, item: body.data };
   } catch (error) {
@@ -303,6 +305,15 @@ async function rememberCandidate(candidate) {
 async function setBadge(text) {
   if (!api.action?.setBadgeText) return;
   await extensionApiCall(api.action.setBadgeText.bind(api.action), { text });
+}
+
+function mediaTypeFromUrl(value) {
+  const extension = String(value).match(/\.([a-z0-9]{2,5})(?:$|[?#])/i)?.[1]?.toLowerCase() || "";
+  return ["mp3", "m4a", "wav", "aac", "ogg", "flac"].includes(extension)
+    ? "audio"
+    : ["mp4", "m4v", "mkv", "webm", "mov", "avi"].includes(extension)
+      ? "video"
+      : "";
 }
 
 function requestContext(details) {
@@ -350,6 +361,11 @@ api.webRequest.onHeadersReceived.addListener(
       detectedAt: new Date().toISOString(),
     };
     candidate.fileName = resolveFileName(candidate);
+    const mediaKey = `${details.tabId || 0}:${candidate.url}`;
+    const previous = lastMediaLog.get(mediaKey);
+    if (previous && previous.fileName === candidate.fileName) return;
+    lastMediaLog.set(mediaKey, { fileName: candidate.fileName });
+    if (lastMediaLog.size > 200) lastMediaLog.delete(lastMediaLog.keys().next().value);
     await rememberCandidate(candidate);
     await logEvent("info", "media", "Recurso multimedia detectado.", {
       fileName: candidate.fileName,
@@ -380,7 +396,7 @@ api.downloads.onCreated.addListener(async (download) => {
     referrer: download.referrer || context.referrer,
     userAgent: context.userAgent,
     cookies: context.cookies,
-    mediaType: context.mediaType,
+    mediaType: context.mediaType || mediaTypeFromUrl(url),
     tabId: download.tabId,
     forceSingleStream: signedUrl(url),
   });
@@ -397,10 +413,14 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === "captureCandidate") {
       const candidate = message.candidate || {};
+      const context = recentByUrl.get(candidate.url) || {};
       return queueCandidate({
         ...candidate,
-        pageTitle: sender.tab?.title || candidate.pageTitle,
-        pageUrl: sender.tab?.url || candidate.pageUrl,
+        referrer: candidate.referrer || context.referrer || "",
+        userAgent: context.userAgent || "",
+        cookies: candidate.cookies?.length ? candidate.cookies : context.cookies,
+        pageTitle: sender.tab?.title || candidate.pageTitle || context.pageTitle || "",
+        pageUrl: sender.tab?.url || candidate.pageUrl || context.pageUrl || "",
       });
     }
     if (message.type === "clearLogs") {
@@ -412,6 +432,7 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === "clearCandidates") {
       queuedKeys.clear();
+      lastMediaLog.clear();
       await extensionApiCall(api.storage.local.set.bind(api.storage.local), { candidates: [] });
       await logEvent("info", "captures", "Se limpió el historial de capturas.");
       return { ok: true };
