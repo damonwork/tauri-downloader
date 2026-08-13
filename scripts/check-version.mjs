@@ -1,16 +1,23 @@
 import { readFile } from "node:fs/promises";
 
-const [packageJson, tauriConfig, cargoManifest] = await Promise.all([
+const [packageJson, packageLock, tauriConfig, cargoManifest, chromeManifest, firefoxManifest] = await Promise.all([
   readFile(new URL("../package.json", import.meta.url), "utf8").then(JSON.parse),
+  readFile(new URL("../package-lock.json", import.meta.url), "utf8").then(JSON.parse),
   readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8").then(JSON.parse),
   readFile(new URL("../src-tauri/Cargo.toml", import.meta.url), "utf8"),
+  readFile(new URL("../browser-extension/manifest.chrome.json", import.meta.url), "utf8").then(JSON.parse),
+  readFile(new URL("../browser-extension/manifest.firefox.json", import.meta.url), "utf8").then(JSON.parse),
 ]);
 
 const cargoVersion = cargoManifest.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
 const versions = new Map([
   ["package.json", packageJson.version],
+  ["package-lock.json", packageLock.version],
+  ["package-lock root", packageLock.packages?.[""]?.version],
   ["tauri.conf.json", tauriConfig.version],
   ["Cargo.toml", cargoVersion],
+  ["manifest.chrome.json", chromeManifest.version],
+  ["manifest.firefox.json", firefoxManifest.version],
 ]);
 const uniqueVersions = new Set(versions.values());
 

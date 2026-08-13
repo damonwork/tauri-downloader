@@ -12,6 +12,8 @@ use tokio::sync::{Mutex, Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::diagnostics::{diagnostic_details, DiagnosticLevel, Diagnostics};
+
 use super::{
     engine::{EngineError, ResolvedProxy},
     error::AppError,
@@ -140,8 +142,59 @@ impl DownloadManager {
             }
             item.clone()
         };
-        let path = self.destination_dir(&item)?.join(&item.file_name);
-        reveal_path(&path)
+        let folder = self.destination_dir(&item)?;
+        let metadata = tokio::fs::metadata(&folder).await;
+        let diagnostics = self.app.state::<Arc<Diagnostics>>().inner().clone();
+        let folder_details = || {
+            diagnostic_details([
+                ("downloadId", id.to_owned()),
+                ("folder", folder.display().to_string()),
+            ])
+        };
+        match metadata {
+            Ok(metadata) if metadata.is_dir() => {
+                diagnostics
+                    .record(
+                        DiagnosticLevel::Info,
+                        "reveal",
+                        "reveal_download",
+                        "Abriendo la carpeta de destino de la descarga.",
+                        folder_details(),
+                    )
+                    .await;
+            }
+            Ok(_) => {
+                diagnostics
+                    .record(
+                        DiagnosticLevel::Warning,
+                        "reveal",
+                        "folder_invalid",
+                        "La ruta de destino no es una carpeta.",
+                        folder_details(),
+                    )
+                    .await;
+                return Err(AppError::ExternalOpen(
+                    "La ruta de destino no es una carpeta".to_owned(),
+                ));
+            }
+            Err(error) => {
+                let mut details = folder_details();
+                details.insert("error".to_owned(), error.to_string());
+                diagnostics
+                    .record(
+                        DiagnosticLevel::Warning,
+                        "reveal",
+                        "folder_unavailable",
+                        "No se pudo acceder a la carpeta de destino.",
+                        details,
+                    )
+                    .await;
+                return Err(AppError::ExternalOpen(format!(
+                    "No se pudo acceder a la carpeta de destino: {error}"
+                )));
+            }
+        }
+        reveal_path(&folder, &diagnostics).await
     }
 
     pub async fn add(&self, mut input: CreateDownloadInput) -> Result<DownloadItem, AppError> {
@@ -454,48 +507,95 @@ impl DownloadManager {
     }
 }
 
-fn reveal_path(path: &std::path::Path) -> Result<(), AppError> {
+async fn reveal_path(
+    folder: &std::path::Path,
+    diagnostics: &Arc<Diagnostics>,
+) -> Result<(), AppError> {
     #[cfg(target_os = "windows")]
-    let result = reveal_path_windows(path);
+    let result = reveal_path_windows(folder, diagnostics).await;
     #[cfg(target_os = "macos")]
-    let result = std::process::Command::new("open")
-        .arg("-R")
-        .arg(path)
-        .spawn();
+    let result = reveal_path_macos(folder, diagnostics).await;
     #[cfg(all(unix, not(target_os = "macos")))]
-    let result = std::process::Command::new("xdg-open")
-        .arg(path.parent().unwrap_or(path))
-        .spawn();
+    let result = reveal_path_linux(folder, diagnostics).await;
 
-    result
-        .map(|_| ())
-        .map_err(|error| AppError::ExternalOpen(error.to_string()))
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            diagnostics
+                .record(
+                    DiagnosticLevel::Error,
+                    "reveal",
+                    "reveal_failed",
+                    "No se pudo abrir la carpeta de destino.",
+                    diagnostic_details([("error", error.to_string())]),
+                )
+                .await;
+            Err(AppError::ExternalOpen(error.to_string()))
+        }
+    }
+}
+
+async fn record_reveal_command(diagnostics: &Diagnostics, message: &str, command: String) {
+    diagnostics
+        .record(
+            DiagnosticLevel::Debug,
+            "reveal",
+            "reveal_command",
+            message,
+            diagnostic_details([("command", command)]),
+        )
+        .await;
 }
 
 #[cfg(target_os = "windows")]
-fn reveal_path_windows(path: &std::path::Path) -> std::io::Result<std::process::Child> {
-    // Si el archivo no existe, explorer ignora /select y abre la ubicación
-    // por defecto (Escritorio); en ese caso se abre la carpeta contenedora.
-    if !path.is_file() {
-        let folder = path
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or(path);
-        return std::process::Command::new("explorer.exe")
-            .arg(folder)
-            .spawn();
-    }
-    let select = format!("/select,\"{}\"", path.display());
-    match std::process::Command::new("explorer.exe")
-        .arg(&select)
+async fn reveal_path_windows(
+    folder: &std::path::Path,
+    diagnostics: &Arc<Diagnostics>,
+) -> std::io::Result<()> {
+    record_reveal_command(
+        diagnostics,
+        "Abriendo la carpeta de destino en Explorer.",
+        format!("explorer.exe \"{}\"", folder.display()),
+    )
+    .await;
+    tokio::process::Command::new("explorer.exe")
+        .arg(folder)
         .spawn()
-    {
-        Ok(child) => Ok(child),
-        Err(error) => std::process::Command::new("explorer.exe")
-            .arg(path.parent().unwrap_or(path))
-            .spawn()
-            .map_err(|_| error),
-    }
+        .map(|_| ())
+}
+
+#[cfg(target_os = "macos")]
+async fn reveal_path_macos(
+    folder: &std::path::Path,
+    diagnostics: &Arc<Diagnostics>,
+) -> std::io::Result<()> {
+    record_reveal_command(
+        diagnostics,
+        "Abriendo la carpeta de destino en Finder.",
+        format!("open \"{}\"", folder.display()),
+    )
+    .await;
+    tokio::process::Command::new("open")
+        .arg(folder)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+async fn reveal_path_linux(
+    folder: &std::path::Path,
+    diagnostics: &Arc<Diagnostics>,
+) -> std::io::Result<()> {
+    record_reveal_command(
+        diagnostics,
+        "Abriendo la carpeta de destino.",
+        format!("xdg-open \"{}\"", folder.display()),
+    )
+    .await;
+    tokio::process::Command::new("xdg-open")
+        .arg(folder)
+        .spawn()
+        .map(|_| ())
 }
 
 #[cfg(test)]

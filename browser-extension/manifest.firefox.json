@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fluxor Browser Companion",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Envía descargas y medios del navegador a Fluxor.",
   "permissions": ["cookies", "contextMenus", "downloads", "storage", "tabs", "webRequest"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:17846/*"],

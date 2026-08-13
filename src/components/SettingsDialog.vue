@@ -156,7 +156,7 @@ function cloneSettings(settings: AppSettings): AppSettings {
               </section>
             </div>
 
-            <footer><p v-if="activeSection === 'folders'"><AppIcon name="shield" :size="14" />Las rutas se validan antes de crear archivos.</p><p v-else-if="activeSection === 'diagnostics'"><AppIcon name="shield" :size="14" />Los datos sensibles no se incluyen en el registro.</p><div><button type="button" @click="emit('close')">{{ activeSection === 'diagnostics' ? 'Cerrar' : 'Cancelar' }}</button><button v-if="activeSection !== 'diagnostics'" class="save" type="submit" :disabled="busy">{{ busy ? 'Guardando…' : 'Guardar cambios' }}</button></div></footer>
+            <footer><p v-if="activeSection === 'folders'"><AppIcon name="shield" :size="14" />Las rutas se validan antes de crear archivos.</p><p v-else-if="activeSection === 'diagnostics'"><AppIcon name="shield" :size="14" />Los diagnósticos pueden incluir rutas locales para investigar fallos de apertura.</p><div><button type="button" @click="emit('close')">{{ activeSection === 'diagnostics' ? 'Cerrar' : 'Cancelar' }}</button><button v-if="activeSection !== 'diagnostics'" class="save" type="submit" :disabled="busy">{{ busy ? 'Guardando…' : 'Guardar cambios' }}</button></div></footer>
           </form>
         </div>
       </section>

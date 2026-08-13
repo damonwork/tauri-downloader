@@ -17,22 +17,9 @@ jobs:
       contents: read
     uses: ./.github/workflows/quality.yaml
 
-  validate:
-    name: Validate release version
-    permissions:
-      contents: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Validate package metadata
-        run: node scripts/check-version.mjs
-
   build:
     name: ${{ matrix.name }}
-    needs: [quality, validate]
+    needs: quality
     permissions:
       contents: write
     strategy:

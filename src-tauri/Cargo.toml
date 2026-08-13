@@ -1,6 +1,6 @@
 [package]
 name = "downloader"
-version = "0.1.4"
+version = "0.1.5"
 description = "Fluxor, a resilient desktop download manager"
 authors = ["damonwork"]
 edition = "2021"
@@ -24,6 +24,6 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "socks"] }
 thiserror = "2"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = "0.7"
 uuid = { version = "1", features = ["v4"] }
