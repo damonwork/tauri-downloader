@@ -12,6 +12,44 @@ const recentByUrl = new Map();
 const queuedKeys = new Map();
 const lastMediaLog = new Map();
 
+// Cola de nombres de artifacts de GitHub Actions: content.js anuncia el clic
+// en el icono de descarga, que sí lleva el nombre real; el blob de Azure que
+// responde al final no expone el nombre en headers ni metadata.
+const pendingArtifacts = [];
+const PENDING_ARTIFACT_TTL_MS = 60_000;
+
+function normalizePendingPage(value) {
+  try {
+    return new URL(value || "").href.split("#", 1)[0];
+  } catch {
+    return "";
+  }
+}
+
+function pushPendingArtifact(page, name) {
+  pendingArtifacts.push({ page: normalizePendingPage(page), name, at: Date.now() });
+  while (pendingArtifacts.length > 5) pendingArtifacts.shift();
+}
+
+function popPendingArtifact(page, url) {
+  const now = Date.now();
+  const normalized = normalizePendingPage(page);
+  for (let i = 0; i < pendingArtifacts.length; i += 1) {
+    const pending = pendingArtifacts[i];
+    if (now - pending.at > PENDING_ARTIFACT_TTL_MS) continue;
+    if (pending.page === normalized) return pendingArtifacts.splice(i, 1)[0].name;
+  }
+  if (String(url).includes("actions-results")) {
+    for (let i = 0; i < pendingArtifacts.length; i += 1) {
+      if (now - pendingArtifacts[i].at > PENDING_ARTIFACT_TTL_MS) continue;
+      if (pendingArtifacts[i].page.includes("github.com")) {
+        return pendingArtifacts.splice(i, 1)[0].name;
+      }
+    }
+  }
+  return "";
+}
+
 function headerValue(headers, name) {
   return headers?.find((header) => header.name.toLowerCase() === name)?.value || "";
 }
@@ -42,6 +80,17 @@ function rememberRequest(details) {
 
 function requestContext(details) {
   return requestById.get(details.requestId) || recentByUrl.get(details.url) || {};
+}
+
+// Registra los headers de respuesta para la descarga final: Chrome dispara
+// downloads.onCreated con el nombre provisional de la URL, y el nombre real
+// llega después en el Content-Disposition de la respuesta.
+function rememberResponse(details) {
+  const disposition = headerValue(details.responseHeaders, "content-disposition");
+  const contentType = headerValue(details.responseHeaders, "content-type").split(";", 1)[0].toLowerCase();
+  if (!disposition && !contentType.startsWith("video/") && !contentType.startsWith("audio/")) return;
+  const request = requestById.get(details.requestId) || recentByUrl.get(details.url) || {};
+  recentByUrl.set(details.url, { ...request, contentDisposition: disposition, contentType });
 }
 
 async function cookiesForUrl(url) {

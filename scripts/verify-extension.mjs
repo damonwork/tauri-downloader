@@ -103,4 +103,44 @@ for (const [candidate, expected] of cases) {
   assert.strictEqual(resolved, expected);
 }
 
-console.log(`verify-extension: OK (${scripts.length} scripts, ${cases.length} fixtures de naming)`);
+const captureContext = vm.createContext({ globalThis: {}, ...webGlobals });
+captureContext.globalThis.browser = browserStub();
+for (const script of ["lib/log.js", "lib/url.js", "lib/naming.js", "lib/store.js", "lib/capture.js"]) {
+  vm.runInContext(readFileSync(join(extension, script), "utf8"), captureContext, { filename: script });
+}
+const pushArtifact = (page, name) => vm.runInContext(`pushPendingArtifact(${JSON.stringify(page)}, ${JSON.stringify(name)})`, captureContext);
+const popArtifact = (page, url) => vm.runInContext(`popPendingArtifact(${JSON.stringify(page)}, ${JSON.stringify(url)})`, captureContext);
+const runPage = "https://github.com/damonwork/tauri-downloader/actions/runs/31662997823";
+const blobUrl = "https://productionresultssa14.blob.core.windows.net/actions-results/x/artifacts/ca2167386ed0db94c66eb93e02e8ba549861dc73094911a0a20f56e3e8f15549.zip";
+const artifactCases = [
+  ["clic anuncia el nombre y la descarga lo consume", () => {
+    pushArtifact(runPage, "fluxor-browser-extensions");
+    return popArtifact(runPage, blobUrl) === "fluxor-browser-extensions";
+  }],
+  ["página distinta y recurso no-artifact no consumen el pendiente", () => {
+    pushArtifact(runPage, "fluxor-linux-x64");
+    return popArtifact("https://github.com/otro/repo/actions/runs/1", "https://example.com/files/reporte.zip") === "";
+  }],
+  ["dos clics seguidos: se consume el más antiguo (orden de descargas)", () => {
+    pushArtifact("https://github.com/damonwork/tauri-downloader/actions/runs/1", "fluxor-macos-x64");
+    return popArtifact(runPage, blobUrl) === "fluxor-linux-x64";
+  }],
+  ["sin página emparejada, el blob de actions-results consume el pendiente más antiguo", () => {
+    pushArtifact("https://github.com/damonwork/tauri-downloader/actions/runs/2", "fluxor-windows-x64");
+    return popArtifact("", blobUrl) === "fluxor-macos-x64";
+  }],
+  ["el nombre del artifact se conserva en la resolución con .zip", () => {
+    return resolve({
+      url: blobUrl,
+      fileName: "fluxor-linux-x64.zip",
+      pageUrl: runPage,
+      pageTitle: "Actions · damonwork/tauri-downloader",
+      mediaType: "",
+    }) === "fluxor-linux-x64.zip";
+  }],
+];
+for (const [name, check] of artifactCases) {
+  assert.strictEqual(check(), true, name);
+}
+
+console.log(`verify-extension: OK (${scripts.length} scripts, ${cases.length} fixtures de naming, ${artifactCases.length} fixtures de artifacts)`);

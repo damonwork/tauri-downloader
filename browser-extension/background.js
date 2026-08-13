@@ -38,6 +38,7 @@ try {
 
 api.webRequest.onHeadersReceived.addListener(
   async (details) => {
+    rememberResponse(details);
     if (!mediaResponse(details)) return;
     const context = requestContext(details);
     const tab = details.tabId >= 0 && api.tabs?.get
@@ -87,9 +88,16 @@ api.downloads.onCreated.addListener(async (download) => {
   if (download.tabId >= 0 && api.tabs?.get) {
     tab = await extensionApiCall(api.tabs.get.bind(api.tabs), download.tabId).catch(() => null);
   }
+  const pendingName = popPendingArtifact(download.referrer || "", url)
+    || popPendingArtifact(tab?.url || context.pageUrl || "", url);
+  const fileName = pendingName
+    ? safeFileName(/\.zip$/i.test(pendingName) ? pendingName : `${pendingName}.zip`)
+    : fileNameFromDisposition(context.contentDisposition)
+      || optionalFileName(download.filename?.split(/[\\/]/).pop())
+      || fileNameFromUrl(url);
   const result = await queueCandidate({
     url,
-    fileName: optionalFileName(download.filename?.split(/[\\/]/).pop()) || fileNameFromUrl(url),
+    fileName,
     pageTitle: tab?.title || context.pageTitle,
     pageUrl: tab?.url || context.pageUrl || download.referrer,
     referrer: download.referrer || context.referrer,
@@ -121,6 +129,10 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
         pageTitle: sender.tab?.title || candidate.pageTitle || context.pageTitle || "",
         pageUrl: sender.tab?.url || candidate.pageUrl || context.pageUrl || "",
       });
+    }
+    if (message.type === "pendingArtifact") {
+      if (message.name) pushPendingArtifact(message.page || "", message.name);
+      return { ok: true };
     }
     if (message.type === "clearLogs") {
       logQueue = logQueue.then(async () => {

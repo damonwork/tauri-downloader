@@ -19,6 +19,27 @@ function fileNameFromUrl(value) {
   }
 }
 
+function watchGitHubArtifactClicks() {
+  if (!/^https:\/\/github\.com\//.test(location.href)) return;
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    const anchor = target?.closest ? target.closest("a[href*='/artifacts/']") : null;
+    if (!anchor) return;
+    if (!/\/actions\/runs\/\d+\/artifacts\/\d+/.test(anchor.getAttribute("href") || "")) return;
+    const label = (anchor.getAttribute("aria-label") || "").toLowerCase();
+    if (!label.startsWith("download") && (anchor.textContent || "").trim() !== "Download") return;
+    const labelName = (anchor.getAttribute("aria-label") || "")
+      .replace(/^Download\s+/i, "").replace(/\s*\(opens in a new tab\)\s*$/i, "").trim();
+    const rowName = anchor.closest("tr")?.querySelector("a.text-bold")?.textContent?.trim();
+    const titleName = document.title.replace(/\s*·.*$/, "").trim();
+    const name = (labelName && labelName !== "Download" && labelName)
+      || rowName
+      || (/^actions$/i.test(titleName) ? "" : titleName);
+    if (!name) return;
+    api.runtime.sendMessage({ type: "pendingArtifact", page: location.href, name });
+  }, true);
+}
+
 function addStyle() {
   if (document.getElementById("fluxor-capture-style")) return;
   const style = document.createElement("style");
@@ -93,4 +114,5 @@ async function start() {
   new MutationObserver(() => document.querySelectorAll("video").forEach(addButton)).observe(document.documentElement, { childList: true, subtree: true });
 }
 
+watchGitHubArtifactClicks();
 start().catch(() => {});

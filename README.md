@@ -186,6 +186,14 @@ Firefox vía `background.scripts` del manifest.
   título de la página para episodios (`Ver episodio N de X - Fansub` y
   `X Episodio N`), luego el nombre de la URL y el slug de la página; siempre
   devuelve un nombre sanitizado y nunca aplica el título sobre nombres reales.
+- **Artifacts de GitHub Actions**: la respuesta del blob trae el nombre real en
+  `Content-Disposition`, pero Chrome dispara `downloads.onCreated` con el
+  nombre provisional del blob (hash) antes de recibir los headers. La
+  extensión lee el nombre de los headers de respuesta (mecanismo genérico
+  para cualquier sitio) y además intercepta el clic en el icono de descarga
+  (como IDM, el único sitio donde el nombre existe antes de la respuesta),
+  por lo que el artifact llega con su nombre real, p. ej.
+  `fluxor-browser-extensions.zip`.
 - **Contexto real de la petición**: captura cookies, Referer y User-Agent de la
   solicitud original (`onBeforeSendHeaders`) y los reutiliza para la descarga.
 - **Enlaces firmados**: detecta URLs firmadas (Policy, Signature, X-Amz, etc.) y
