@@ -119,7 +119,7 @@ jobs:
 
   extension:
     name: Browser extension
-    needs: [quality, validate, build]
+    needs: [quality, build]
     permissions:
       contents: write
     runs-on: ubuntu-24.04
