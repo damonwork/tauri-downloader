@@ -136,16 +136,6 @@ impl DownloadEngine {
         recover_interrupted_finalization(&input.destination_dir, &input.item.file_name).await?;
 
         let client = build_client(&input.proxy, &input.item.source)?;
-        if input.item.source.force_single_stream {
-            return run_single(
-                input,
-                client,
-                cancellation,
-                progress,
-                Some("El enlace firmado solo autoriza una solicitud continua".to_owned()),
-            )
-            .await;
-        }
         let single_partial = partial_path(&input.destination_dir, &input.item.file_name);
         if file_len(&single_partial).await? > 0 {
             return fallback_to_single(
@@ -180,11 +170,7 @@ impl DownloadEngine {
         let probe = probe_source(&client, &input.item.source, &cancellation).await?;
 
         if let Some(probe) = probe.clone() {
-            if supports_segmented_transfer(
-                &probe,
-                input.item.threads,
-                input.item.source.force_single_stream,
-            ) {
+            if supports_segmented_transfer(&probe, input.item.threads) {
                 let segmented = run_segmented(
                     input.clone(),
                     client.clone(),
@@ -260,13 +246,8 @@ fn single_stream_reason(
     }
 }
 
-fn supports_segmented_transfer(
-    probe: &ProbeResult,
-    requested_threads: u8,
-    force_single_stream: bool,
-) -> bool {
-    !force_single_stream
-        && probe.accepts_ranges
+fn supports_segmented_transfer(probe: &ProbeResult, requested_threads: u8) -> bool {
+    probe.accepts_ranges
         && requested_threads > 1
         && matches!(&probe.size, TransferSize::Known { total_bytes } if *total_bytes >= MIN_SEGMENT_SIZE)
 }

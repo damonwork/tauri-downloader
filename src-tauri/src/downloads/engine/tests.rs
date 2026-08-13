@@ -128,9 +128,8 @@ fn range_server_without_validator_can_use_segments() {
         accepts_ranges: true,
     };
 
-    assert!(supports_segmented_transfer(&mediafire_like, 8, false));
-    assert!(!supports_segmented_transfer(&mediafire_like, 1, false));
-    assert!(!supports_segmented_transfer(&mediafire_like, 8, true));
+    assert!(supports_segmented_transfer(&mediafire_like, 8));
+    assert!(!supports_segmented_transfer(&mediafire_like, 1));
 }
 
 #[test]

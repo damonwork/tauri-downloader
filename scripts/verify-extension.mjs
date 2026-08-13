@@ -21,7 +21,12 @@ for (const script of scripts) {
 
 function browserStub() {
   return {
-    runtime: { lastError: null, onMessage: { addListener() {} } },
+    runtime: { lastError: null, onMessage: { addListener() {} }, onInstalled: { addListener() {} } },
+    contextMenus: {
+      remove(_id, callback) { if (callback) callback(); },
+      create() {},
+      onClicked: { addListener() {} },
+    },
     storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
     action: { setBadgeText() { return Promise.resolve(); } },
     webRequest: {

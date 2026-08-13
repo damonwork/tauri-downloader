@@ -110,6 +110,38 @@ api.downloads.onCreated.addListener(async (download) => {
   if (result.ok) await extensionApiCall(api.downloads.cancel.bind(api.downloads), download.id);
 });
 
+const MENU_ID = "fluxor-download-link";
+
+function installContextMenu() {
+  api.contextMenus.remove(MENU_ID, () => {
+    api.contextMenus.create({
+      id: MENU_ID,
+      title: "Descargar con Fluxor",
+      contexts: ["link", "audio", "video"],
+    });
+  });
+}
+
+api.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId !== MENU_ID) return;
+  const url = info.linkUrl || info.srcUrl || "";
+  if (!validUrl(url)) return;
+  const context = recentByUrl.get(url) || {};
+  await queueCandidate({
+    url,
+    fileName: fileNameFromUrl(url),
+    pageUrl: tab?.url || context.pageUrl || "",
+    pageTitle: tab?.title || context.pageTitle || "",
+    referrer: tab?.url || context.referrer || "",
+    userAgent: context.userAgent || "",
+    mediaType: mediaTypeFromUrl(url),
+    tabId: tab?.id ?? -1,
+    forceSingleStream: signedUrl(url),
+  });
+});
+
+installContextMenu();
+
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     if (message.type === "getState") return settings();

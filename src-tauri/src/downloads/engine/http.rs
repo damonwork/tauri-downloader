@@ -35,22 +35,41 @@ pub(super) async fn probe_source(
             Err(_) => return Ok(None),
         },
     };
+    if response.status().is_success() {
+        return Ok(Some(ProbeResult {
+            size: response_size(response.headers(), 0),
+            validator: response_validator(response.headers()),
+            accepts_ranges: accepts_ranges(response.headers()),
+        }));
+    }
+    // Algunos CDN firmados rechazan HEAD y solo autorizan GET con rango
+    // (p. ej. CloudFront con Policy ByteRange): se comprueba con un GET de
+    // un byte sin leer el cuerpo de la respuesta.
+    let request = apply_source_headers(client.get(&source.url), source)?.header(RANGE, "bytes=0-0");
+    let response = tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
+        response = request.send() => match response {
+            Ok(response) => response,
+            Err(_) => return Ok(None),
+        },
+    };
+    if response.status() == StatusCode::PARTIAL_CONTENT {
+        return Ok(Some(ProbeResult {
+            size: content_range_total(response.headers()).map_or(TransferSize::Unknown, |total| {
+                TransferSize::Known { total_bytes: total }
+            }),
+            validator: response_validator(response.headers()),
+            accepts_ranges: true,
+        }));
+    }
     if !response.status().is_success() {
         return Ok(None);
     }
-    let size = response
-        .headers()
-        .get(CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok())
-        .map_or(TransferSize::Unknown, |total_bytes| TransferSize::Known {
-            total_bytes,
-        });
-    let accepts_ranges = accepts_ranges(response.headers());
     Ok(Some(ProbeResult {
-        size,
+        size: response_size(response.headers(), 0),
         validator: response_validator(response.headers()),
-        accepts_ranges,
+        accepts_ranges: false,
     }))
 }
 

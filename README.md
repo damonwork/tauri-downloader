@@ -16,7 +16,7 @@ El repositorio contiene un MVP funcional:
 - [x] Pausar, reanudar, reiniciar, reintentar manualmente y eliminar.
 - [x] Reanudación validada con `Range` y `Content-Range`, más ETag o Last-Modified cuando están disponibles.
 - [x] Indicador de reanudación con estado independiente del validador de identidad.
-- [x] Flujo único forzado para enlaces firmados: envía `Range: bytes=0-` en la primera solicitud y marca la reanudación como no soportada (CDN de un solo uso).
+- [x] Enlaces firmados con negociación real: si el servidor rechaza HEAD, se comprueba con un `GET` de un byte por rango; si acepta rangos se segmenta y reanuda con normalidad (p. ej. CloudFront/HuggingFace), y si es estricto se degrada a un solo flujo con `Range: bytes=0-` (CDN de un solo uso).
 - [x] Reemplazo de enlaces vencidos sin perder segmentos parciales compatibles.
 - [x] Headers y cookies específicos por descarga.
 - [x] Perfiles proxy HTTP, HTTPS y SOCKS5 con comprobación de salud.
@@ -182,6 +182,10 @@ Firefox vía `background.scripts` del manifest.
   repetir la misma detección mientras el reproductor reutilice el mismo enlace.
 - **Botón sobre `<video>`**: añade "Descargar con Fluxor" encima de los
   reproductores para enviar el vídeo activo directamente.
+- **Menú contextual**: con el botón derecho sobre un enlace (o un botón envuelto
+  en un enlace) aparece "Descargar con Fluxor", que envía esa URL a la cola
+  con las cookies, el Referer y el User-Agent de la pestaña actual; también
+  aparece sobre elementos de audio y vídeo.
 - **Nombres de archivo inteligentes**: prioriza el `Content-Disposition`, luego el
   título de la página para episodios (`Ver episodio N de X - Fansub` y
   `X Episodio N`), luego el nombre de la URL y el slug de la página; siempre
