@@ -1,23 +1,8 @@
 const api = globalThis.browser ?? globalThis.chrome;
 const BUTTON_CLASS = "fluxor-capture-button";
 
-function validUrl(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function fileNameFromUrl(value) {
-  try {
-    const url = new URL(value);
-    return decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() || "video");
-  } catch {
-    return "video";
-  }
-}
+// validUrl y fileNameFromUrl viven en lib/url.js y lib/naming.js y se cargan
+// aquí a través de content_scripts del manifest (mismo mundo aislado).
 
 function watchGitHubArtifactClicks() {
   if (!/^https:\/\/github\.com\//.test(location.href)) return;
@@ -36,7 +21,7 @@ function watchGitHubArtifactClicks() {
       || rowName
       || (/^actions$/i.test(titleName) ? "" : titleName);
     if (!name) return;
-    api.runtime.sendMessage({ type: "pendingArtifact", page: location.href, name });
+    api.runtime.sendMessage({ type: "pendingArtifact", page: location.href, name, href: anchor.href });
   }, true);
 }
 
@@ -57,6 +42,10 @@ function capture(video, button) {
   if (!validUrl(url)) {
     button.dataset.state = "error";
     button.textContent = "Sin URL";
+    window.setTimeout(() => {
+      button.textContent = "Descargar con Fluxor";
+      button.dataset.state = "";
+    }, 2400);
     return;
   }
   button.dataset.state = "busy";
@@ -107,11 +96,18 @@ function addButton(video) {
 }
 
 async function start() {
-  const state = await api.runtime.sendMessage({ type: "getState" });
-  if (state?.overlay === false) return;
+  const options = await api.runtime.sendMessage({ type: "getOptions" });
+  if (options?.overlay === false) return;
   addStyle();
   document.querySelectorAll("video").forEach(addButton);
-  new MutationObserver(() => document.querySelectorAll("video").forEach(addButton)).observe(document.documentElement, { childList: true, subtree: true });
+  const observer = new MutationObserver((mutations) => {
+    const addedVideo = mutations.some((mutation) => Array.from(mutation.addedNodes).some((node) => {
+      return node.nodeType === 1 && (node.nodeName === "VIDEO" || node.querySelector?.("video"));
+    }));
+    if (!addedVideo) return;
+    document.querySelectorAll("video").forEach(addButton);
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
 }
 
 watchGitHubArtifactClicks();

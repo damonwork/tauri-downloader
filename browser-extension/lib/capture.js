@@ -13,8 +13,9 @@ const queuedKeys = new Map();
 const lastMediaLog = new Map();
 
 // Cola de nombres de artifacts de GitHub Actions: content.js anuncia el clic
-// en el icono de descarga, que sí lleva el nombre real; el blob de Azure que
-// responde al final no expone el nombre en headers ni metadata.
+// en el icono de descarga (que sí lleva el nombre real y el href del artifact)
+// antes de que el blob de Azure responda con un nombre con hash. El blob
+// final no expone el nombre en headers ni metadata.
 const pendingArtifacts = [];
 const PENDING_ARTIFACT_TTL_MS = 60_000;
 
@@ -26,18 +27,25 @@ function normalizePendingPage(value) {
   }
 }
 
-function pushPendingArtifact(page, name) {
-  pendingArtifacts.push({ page: normalizePendingPage(page), name, at: Date.now() });
+function pushPendingArtifact(page, name, href) {
+  pendingArtifacts.push({ page: normalizePendingPage(page), name, href: href || "", at: Date.now() });
   while (pendingArtifacts.length > 5) pendingArtifacts.shift();
 }
 
-function popPendingArtifact(page, url) {
+function popPendingArtifact(page, url, href) {
   const now = Date.now();
   const normalized = normalizePendingPage(page);
   for (let i = 0; i < pendingArtifacts.length; i += 1) {
     const pending = pendingArtifacts[i];
     if (now - pending.at > PENDING_ARTIFACT_TTL_MS) continue;
-    if (pending.page === normalized) return pendingArtifacts.splice(i, 1)[0].name;
+    if (pending.href && pending.href === href) return pendingArtifacts.splice(i, 1)[0].name;
+  }
+  for (let i = 0; i < pendingArtifacts.length; i += 1) {
+    const pending = pendingArtifacts[i];
+    if (now - pending.at > PENDING_ARTIFACT_TTL_MS) continue;
+    if (pending.page === normalized && String(url).includes("actions-results")) {
+      return pendingArtifacts.splice(i, 1)[0].name;
+    }
   }
   if (String(url).includes("actions-results")) {
     for (let i = 0; i < pendingArtifacts.length; i += 1) {
@@ -90,7 +98,7 @@ function rememberResponse(details) {
   const contentType = headerValue(details.responseHeaders, "content-type").split(";", 1)[0].toLowerCase();
   if (!disposition && !contentType.startsWith("video/") && !contentType.startsWith("audio/")) return;
   const request = requestById.get(details.requestId) || recentByUrl.get(details.url) || {};
-  recentByUrl.set(details.url, { ...request, contentDisposition: disposition, contentType });
+  recentByUrl.set(details.url, { ...request, contentDisposition: disposition });
 }
 
 async function cookiesForUrl(url) {
@@ -130,15 +138,18 @@ async function queueCandidate(candidate) {
     });
     return { ok: false, error: "Falta el token. Abre la extensión y configura Fluxor." };
   }
-  const key = `${candidate.tabId || 0}:${candidate.url}`;
+  // La deduplicación protege al recurso, no a la pestaña: la clave es la URL
+  // para que todas las vías de captura (medios, descargas, overlay, menú)
+  // compartan la misma ventana y no se envíe dos veces el mismo enlace.
+  const key = candidate.url;
   const previous = queuedKeys.get(key);
   if (previous && Date.now() - previous < 15_000) return { ok: true, duplicate: true };
   queuedKeys.set(key, Date.now());
+  if (queuedKeys.size > 200) queuedKeys.delete(queuedKeys.keys().next().value);
   const fileName = resolveFileName(candidate);
   const cookies = candidate.cookies?.length ? candidate.cookies : await cookiesForUrl(candidate.url);
   const effectiveCandidate = { ...candidate, fileName, cookies };
-  try {
-    await logEvent("info", "bridge", "Enviando recurso a Fluxor.", {
+  await logEvent("info", "bridge", "Enviando recurso a Fluxor.", {
       url: diagnosticUrl(candidate.url),
       fileName,
       hasReferrer: Boolean(candidate.referrer || candidate.pageUrl),
@@ -146,39 +157,45 @@ async function queueCandidate(candidate) {
       cookieCount: cookies.length,
       forceSingleStream: Boolean(candidate.forceSingleStream),
     });
-    const response = await fetch(`${BRIDGE_URL}/v1/downloads`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Fluxor-Token": current.token },
-      body: JSON.stringify({ input: {
-        url: candidate.url,
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(`${BRIDGE_URL}/v1/downloads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Fluxor-Token": current.token },
+        body: JSON.stringify({ input: {
+          url: candidate.url,
+          fileName,
+          pageUrl: candidate.pageUrl || "",
+          pageTitle: candidate.pageTitle || "",
+          referrer: candidate.referrer || "",
+          userAgent: candidate.userAgent || "",
+          cookies,
+          forceSingleStream: Boolean(candidate.forceSingleStream),
+        } }),
+        signal: controller.signal,
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.ok) throw new Error(body.error || `Fluxor respondió HTTP ${response.status}.`);
+      await rememberCandidate({ ...effectiveCandidate, sentAt: new Date().toISOString(), ok: true });
+      await logEvent("info", "bridge", "Fluxor aceptó la descarga.", {
+        fileName: body.data?.fileName || fileName,
+        url: diagnosticUrl(candidate.url),
+      });
+      queuedKeys.set(key, Date.now());
+      await setBadge("");
+      return { ok: true, item: body.data };
+    } catch (error) {
+      queuedKeys.delete(key);
+      await rememberCandidate({ ...effectiveCandidate, sentAt: new Date().toISOString(), ok: false, error: error.message });
+      await logEvent("error", "bridge", "No se pudo enviar la descarga a Fluxor.", {
+        error: error.message,
         fileName,
-        pageUrl: candidate.pageUrl || "",
-        pageTitle: candidate.pageTitle || "",
-        referrer: candidate.referrer || "",
-        userAgent: candidate.userAgent || "",
-        cookies,
-        forceSingleStream: Boolean(candidate.forceSingleStream),
-      } }),
-    });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok || !body.ok) throw new Error(body.error || `Fluxor respondió HTTP ${response.status}.`);
-    await rememberCandidate({ ...effectiveCandidate, sentAt: new Date().toISOString(), ok: true });
-    await logEvent("info", "bridge", "Fluxor aceptó la descarga.", {
-      fileName: body.data?.fileName || fileName,
-      url: diagnosticUrl(candidate.url),
-    });
-    queuedKeys.set(key, Date.now());
-    await setBadge("");
-    return { ok: true, item: body.data };
-  } catch (error) {
-    queuedKeys.delete(key);
-    await rememberCandidate({ ...effectiveCandidate, sentAt: new Date().toISOString(), ok: false, error: error.message });
-    await logEvent("error", "bridge", "No se pudo enviar la descarga a Fluxor.", {
-      error: error.message,
-      fileName,
-      url: diagnosticUrl(candidate.url),
-    });
-    await setBadge("!");
-    return { ok: false, error: error.message || "No se pudo contactar con Fluxor." };
-  }
+        url: diagnosticUrl(candidate.url),
+      });
+      await setBadge("!");
+      return { ok: false, error: error.message || "No se pudo contactar con Fluxor." };
+    } finally {
+      clearTimeout(timeout);
+    }
 }

@@ -19,15 +19,20 @@ for (const script of scripts) {
   execFileSync(process.execPath, ["--check", join(extension, script)]);
 }
 
-function browserStub() {
+function browserStub(initial = {}) {
   return {
-    runtime: { lastError: null, onMessage: { addListener() {} }, onInstalled: { addListener() {} } },
+    runtime: { lastError: null, onMessage: { addListener() {} } },
     contextMenus: {
       remove(_id, callback) { if (callback) callback(); },
       create() {},
       onClicked: { addListener() {} },
     },
-    storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
+    storage: {
+      local: {
+        get() { return Promise.resolve(initial); },
+        set() { return Promise.resolve(); },
+      },
+    },
     action: { setBadgeText() { return Promise.resolve(); } },
     webRequest: {
       onBeforeSendHeaders: { addListener() {} },
@@ -40,13 +45,25 @@ function browserStub() {
 }
 
 const order = ["lib/log.js", "lib/url.js", "lib/naming.js", "lib/store.js", "lib/capture.js", "background.js"];
-const webGlobals = { URL, URLSearchParams, decodeURIComponent, encodeURIComponent, setTimeout, clearTimeout, console, fetch };
+const webGlobals = { URL, URLSearchParams, decodeURIComponent, encodeURIComponent, setTimeout, clearTimeout, AbortController, console, fetch };
 
 for (const browser of ["chrome", "firefox"]) {
   const context = vm.createContext({ globalThis: {}, ...webGlobals });
   context.globalThis.browser = browserStub();
-  for (const script of order) {
-    vm.runInContext(readFileSync(join(extension, script), "utf8"), context, { filename: script });
+  if (browser === "chrome") {
+    const loaded = [];
+    context.globalThis.importScripts = (...files) => {
+      for (const file of files) {
+        vm.runInContext(readFileSync(join(extension, file), "utf8"), context, { filename: file });
+        loaded.push(file);
+      }
+    };
+    vm.runInContext(readFileSync(join(extension, "background.js"), "utf8"), context, { filename: "background.js" });
+    assert.deepStrictEqual(loaded, ["lib/log.js", "lib/url.js", "lib/naming.js", "lib/store.js", "lib/capture.js"], "chrome: importScripts carga los módulos de lib/");
+  } else {
+    for (const script of order) {
+      vm.runInContext(readFileSync(join(extension, script), "utf8"), context, { filename: script });
+    }
   }
   assert.strictEqual(vm.runInContext("typeof logEvent", context), "function", `${browser}: logEvent cargado`);
   assert.strictEqual(vm.runInContext("typeof queueCandidate", context), "function", `${browser}: queueCandidate cargado`);
@@ -101,6 +118,20 @@ const cases = [
     mediaType: "",
   }, "gemma-4-E2B-it-qat-GGUF-MTP-Q4_K_M.gguf"],
   [{
+    url: "https://cdn.example.com/v/12345.mp4",
+    fileName: "12345.mp4",
+    pageUrl: "https://animefenix2.tv/ver/shingeki-5",
+    pageTitle: "Ver episodio 5 de Shingeki no Kyojin - Subs",
+    mediaType: "video",
+  }, "12345.mp4"],
+  [{
+    url: "https://re.ironhentai.com/hugging.php",
+    fileName: "hugging.php",
+    pageUrl: "https://animefenix2.tv/guia/descargas",
+    pageTitle: "Guía de descargas y tutoriales",
+    mediaType: "",
+  }, "hugging.php"],
+  [{
     url: "https://example.com/files/Informe Final 2026.pdf",
     fileName: "",
     pageUrl: "https://example.com/files",
@@ -120,26 +151,35 @@ captureContext.globalThis.browser = browserStub();
 for (const script of ["lib/log.js", "lib/url.js", "lib/naming.js", "lib/store.js", "lib/capture.js"]) {
   vm.runInContext(readFileSync(join(extension, script), "utf8"), captureContext, { filename: script });
 }
-const pushArtifact = (page, name) => vm.runInContext(`pushPendingArtifact(${JSON.stringify(page)}, ${JSON.stringify(name)})`, captureContext);
-const popArtifact = (page, url) => vm.runInContext(`popPendingArtifact(${JSON.stringify(page)}, ${JSON.stringify(url)})`, captureContext);
+const pushArtifact = (page, name, href) => vm.runInContext(`pushPendingArtifact(${JSON.stringify(page)}, ${JSON.stringify(name)}, ${JSON.stringify(href || "")})`, captureContext);
+const popArtifact = (page, url, href) => vm.runInContext(`popPendingArtifact(${JSON.stringify(page)}, ${JSON.stringify(url)}, ${JSON.stringify(href || "")})`, captureContext);
 const runPage = "https://github.com/damonwork/tauri-downloader/actions/runs/31662997823";
 const blobUrl = "https://productionresultssa14.blob.core.windows.net/actions-results/x/artifacts/ca2167386ed0db94c66eb93e02e8ba549861dc73094911a0a20f56e3e8f15549.zip";
+const artifactHref = "https://github.com/damonwork/tauri-downloader/actions/runs/31662997823/artifacts/9166984953";
 const artifactCases = [
-  ["clic anuncia el nombre y la descarga lo consume", () => {
-    pushArtifact(runPage, "fluxor-browser-extensions");
-    return popArtifact(runPage, blobUrl) === "fluxor-browser-extensions";
+  ["clic anuncia el nombre y la descarga lo consume por href exacto", () => {
+    pushArtifact(runPage, "fluxor-browser-extensions", artifactHref);
+    return popArtifact(runPage, blobUrl, artifactHref) === "fluxor-browser-extensions";
   }],
-  ["página distinta y recurso no-artifact no consumen el pendiente", () => {
-    pushArtifact(runPage, "fluxor-linux-x64");
-    return popArtifact("https://github.com/otro/repo/actions/runs/1", "https://example.com/files/reporte.zip") === "";
+  ["href y recurso no-artifact no consumen el pendiente", () => {
+    pushArtifact(runPage, "fluxor-linux-x64", artifactHref);
+    return popArtifact("https://github.com/otro/repo/actions/runs/1", "https://example.com/files/reporte.zip", "https://example.com/files/reporte.zip") === "";
   }],
-  ["dos clics seguidos: se consume el más antiguo (orden de descargas)", () => {
-    pushArtifact("https://github.com/damonwork/tauri-downloader/actions/runs/1", "fluxor-macos-x64");
-    return popArtifact(runPage, blobUrl) === "fluxor-linux-x64";
+  ["dos clics seguidos en la misma página: se consume el más antiguo (orden de descargas)", () => {
+    pushArtifact(runPage, "fluxor-linux-x64", `${artifactHref}1`);
+    pushArtifact(runPage, "fluxor-macos-x64", `${artifactHref}2`);
+    return popArtifact(runPage, blobUrl, "") === "fluxor-linux-x64";
   }],
-  ["sin página emparejada, el blob de actions-results consume el pendiente más antiguo", () => {
-    pushArtifact("https://github.com/damonwork/tauri-downloader/actions/runs/2", "fluxor-windows-x64");
-    return popArtifact("", blobUrl) === "fluxor-macos-x64";
+  ["sin página emparejada, el blob de actions-results consume el pendiente de github más antiguo", () => {
+    vm.runInContext("pendingArtifacts.length = 0", captureContext);
+    pushArtifact("https://github.com/damonwork/tauri-downloader/actions/runs/2", "fluxor-windows-x64", "");
+    return popArtifact("", blobUrl, "") === "fluxor-windows-x64";
+  }],
+  ["pendientes expirados no se consumen", () => {
+    vm.runInContext("pendingArtifacts.length = 0", captureContext);
+    pushArtifact(runPage, "fluxor-macos-x64", artifactHref);
+    vm.runInContext("pendingArtifacts[pendingArtifacts.length - 1].at = 0", captureContext);
+    return popArtifact(runPage, blobUrl, artifactHref) === "";
   }],
   ["el nombre del artifact se conserva en la resolución con .zip", () => {
     return resolve({
@@ -155,4 +195,16 @@ for (const [name, check] of artifactCases) {
   assert.strictEqual(check(), true, name);
 }
 
-console.log(`verify-extension: OK (${scripts.length} scripts, ${cases.length} fixtures de naming, ${artifactCases.length} fixtures de artifacts)`);
+const dedupContext = vm.createContext({ globalThis: {}, ...webGlobals });
+dedupContext.api = browserStub({ token: "t" });
+dedupContext.fetch = async () => ({ ok: true, json: async () => ({ ok: true, data: {} }) });
+for (const script of ["lib/log.js", "lib/url.js", "lib/naming.js", "lib/store.js", "lib/capture.js"]) {
+  vm.runInContext(readFileSync(join(extension, script), "utf8"), dedupContext, { filename: script });
+}
+const enqueue = () => vm.runInContext('queueCandidate({ url: "https://example.com/video.mp4", fileName: "video.mp4" })', dedupContext);
+const firstSend = await enqueue();
+const secondSend = await enqueue();
+assert.strictEqual(firstSend.ok, true, "dedup: el primer envío es aceptado");
+assert.strictEqual(secondSend.duplicate, true, "dedup: el segundo envío del mismo recurso se descarta");
+
+console.log(`verify-extension: OK (${scripts.length} scripts, ${cases.length} fixtures de naming, ${artifactCases.length} fixtures de artifacts, dedup)`);

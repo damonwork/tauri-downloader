@@ -2,7 +2,8 @@
 // Prioridad: nombre del navegador/Content-Disposition -> título del episodio -> URL -> slug.
 // Las funciones de episodios (titleFileName/slugFileName) actúan cuando el
 // recurso es multimedia o cuando el nombre detectado es técnico (no describe
-// el contenido); el título nunca se impone sobre un nombre real.
+// el contenido); el título nunca se impone sobre un nombre real y plausible,
+// en línea con page_file_name de src-tauri (manager/browser.rs).
 // IMPORTANTE: resolveFileName SIEMPRE devuelve un string (nunca true/false).
 
 function safeFileName(value) {
@@ -26,7 +27,7 @@ function decodeUrlComponent(value) {
 
 function fileNameFromDisposition(value) {
   if (!value) return "";
-  const extended = value.match(/filename\*\s*=\s*(?:UTF-8'')?([^;]+)/i)?.[1];
+  const extended = value.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)?.[1];
   if (extended) return safeFileName(decodeUrlComponent(extended.trim().replace(/^"|"$/g, "")));
   return optionalFileName(value.match(/filename\s*=\s*"([^"]+)"/i)?.[1]
     || value.match(/filename\s*=\s*([^;]+)/i)?.[1]?.trim());
@@ -66,7 +67,7 @@ function titleFileName(pageTitle, mediaType, fallbackName) {
   if (episodePage) name = `${episodePage[2].trim()} Episodio ${episodePage[1].trim()}`;
   else if (episodeTitle) name = `${episodeTitle[1].trim()} Episodio ${episodeTitle[2]}`;
   if (!name) return "";
-  if (!isTechnicalFileName(fallbackName) && mediaType !== "video" && mediaType !== "audio") return "";
+  if (fileExtension(fallbackName) && !isTechnicalFileName(fallbackName)) return "";
   const extension = (!isTechnicalFileName(fallbackName) && fileExtension(fallbackName))
     || (mediaType === "audio" ? "mp3" : mediaType === "video" ? "mp4" : "");
   return safeFileName(extension ? `${name}.${extension}` : name);

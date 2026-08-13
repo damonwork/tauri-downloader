@@ -474,6 +474,17 @@ fn reveal_path(path: &std::path::Path) -> Result<(), AppError> {
 
 #[cfg(target_os = "windows")]
 fn reveal_path_windows(path: &std::path::Path) -> std::io::Result<std::process::Child> {
+    // Si el archivo no existe, explorer ignora /select y abre la ubicación
+    // por defecto (Escritorio); en ese caso se abre la carpeta contenedora.
+    if !path.is_file() {
+        let folder = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or(path);
+        return std::process::Command::new("explorer.exe")
+            .arg(folder)
+            .spawn();
+    }
     let select = format!("/select,\"{}\"", path.display());
     match std::process::Command::new("explorer.exe")
         .arg(&select)

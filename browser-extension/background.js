@@ -38,6 +38,8 @@ try {
 
 api.webRequest.onHeadersReceived.addListener(
   async (details) => {
+    const current = await settings();
+    if (!current.autoCapture) return;
     rememberResponse(details);
     if (!mediaResponse(details)) return;
     const context = requestContext(details);
@@ -51,7 +53,7 @@ api.webRequest.onHeadersReceived.addListener(
       fileName: fileNameFromDisposition(headerValue(details.responseHeaders, "content-disposition"))
         || fileNameFromUrl(location || details.url),
       mediaType: contentType.startsWith("audio/") ? "audio" : contentType.startsWith("video/") ? "video" : "",
-      pageTitle: tab?.title || context.pageTitle,
+      pageTitle: tab?.title || "",
       pageUrl: tab?.url || context.pageUrl,
       referrer: context.referrer,
       userAgent: context.userAgent,
@@ -80,34 +82,44 @@ api.webRequest.onHeadersReceived.addListener(
 );
 
 api.downloads.onCreated.addListener(async (download) => {
-  const current = await settings();
-  if (!current.autoCapture || !validUrl(download.url)) return;
-  const url = download.finalUrl || download.url;
-  const context = recentByUrl.get(url) || recentByUrl.get(download.url) || {};
-  let tab = null;
-  if (download.tabId >= 0 && api.tabs?.get) {
-    tab = await extensionApiCall(api.tabs.get.bind(api.tabs), download.tabId).catch(() => null);
+  try {
+    const current = await settings();
+    if (!current.autoCapture || !validUrl(download.url)) return;
+    const url = download.finalUrl || download.url;
+    const context = recentByUrl.get(url) || recentByUrl.get(download.url) || {};
+    let tab = null;
+    if (download.tabId >= 0 && api.tabs?.get) {
+      tab = await extensionApiCall(api.tabs.get.bind(api.tabs), download.tabId).catch(() => null);
+    }
+    const href = download.url || "";
+    const pendingName = popPendingArtifact(download.referrer || "", url, href)
+      || popPendingArtifact(tab?.url || context.pageUrl || "", url, href);
+    const fileName = pendingName
+      ? safeFileName(/\.zip$/i.test(pendingName) ? pendingName : `${pendingName}.zip`)
+      : fileNameFromDisposition(context.contentDisposition)
+        || optionalFileName(download.filename?.split(/[\\/]/).pop())
+        || fileNameFromUrl(url);
+    const result = await queueCandidate({
+      url,
+      fileName,
+      pageTitle: tab?.title || "",
+      pageUrl: tab?.url || context.pageUrl || download.referrer,
+      referrer: download.referrer || context.referrer,
+      userAgent: context.userAgent,
+      cookies: context.cookies,
+      mediaType: mediaTypeFromUrl(url),
+      tabId: download.tabId,
+      forceSingleStream: signedUrl(url),
+    });
+    if (result.ok) {
+      await extensionApiCall(api.downloads.cancel.bind(api.downloads), download.id).catch(() => {});
+    }
+  } catch (error) {
+    await logEvent("error", "download", "No se pudo procesar la descarga del navegador.", {
+      error: error.message,
+      url: diagnosticUrl(download.url),
+    }).catch(() => {});
   }
-  const pendingName = popPendingArtifact(download.referrer || "", url)
-    || popPendingArtifact(tab?.url || context.pageUrl || "", url);
-  const fileName = pendingName
-    ? safeFileName(/\.zip$/i.test(pendingName) ? pendingName : `${pendingName}.zip`)
-    : fileNameFromDisposition(context.contentDisposition)
-      || optionalFileName(download.filename?.split(/[\\/]/).pop())
-      || fileNameFromUrl(url);
-  const result = await queueCandidate({
-    url,
-    fileName,
-    pageTitle: tab?.title || context.pageTitle,
-    pageUrl: tab?.url || context.pageUrl || download.referrer,
-    referrer: download.referrer || context.referrer,
-    userAgent: context.userAgent,
-    cookies: context.cookies,
-    mediaType: context.mediaType || mediaTypeFromUrl(url),
-    tabId: download.tabId,
-    forceSingleStream: signedUrl(url),
-  });
-  if (result.ok) await extensionApiCall(api.downloads.cancel.bind(api.downloads), download.id);
 });
 
 const MENU_ID = "fluxor-download-link";
@@ -132,7 +144,7 @@ api.contextMenus.onClicked.addListener(async (info, tab) => {
     url,
     fileName: fileNameFromUrl(url),
     pageUrl: tab?.url || context.pageUrl || "",
-    pageTitle: tab?.title || context.pageTitle || "",
+    pageTitle: tab?.title || "",
     referrer: tab?.url || context.referrer || "",
     userAgent: context.userAgent || "",
     mediaType: mediaTypeFromUrl(url),
@@ -146,6 +158,10 @@ installContextMenu();
 api.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     if (message.type === "getState") return settings();
+    if (message.type === "getOptions") {
+      const current = await settings();
+      return { overlay: current.overlay, autoCapture: current.autoCapture };
+    }
     if (message.type === "saveState") {
       const next = { ...(await settings()), ...(message.state || {}) };
       await extensionApiCall(api.storage.local.set.bind(api.storage.local), next);
@@ -159,12 +175,12 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
         referrer: candidate.referrer || context.referrer || "",
         userAgent: context.userAgent || "",
         cookies: candidate.cookies?.length ? candidate.cookies : context.cookies,
-        pageTitle: sender.tab?.title || candidate.pageTitle || context.pageTitle || "",
+        pageTitle: sender.tab?.title || candidate.pageTitle || "",
         pageUrl: sender.tab?.url || candidate.pageUrl || context.pageUrl || "",
       });
     }
     if (message.type === "pendingArtifact") {
-      if (message.name) pushPendingArtifact(message.page || "", message.name);
+      if (message.name) pushPendingArtifact(message.page || "", message.name, message.href || "");
       return { ok: true };
     }
     if (message.type === "clearLogs") {
@@ -185,10 +201,19 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const current = await settings();
       if (!current.token) return { ok: false, error: "Falta el token." };
       try {
-        const response = await fetch(`${BRIDGE_URL}/v1/status`, { headers: { "X-Fluxor-Token": current.token } });
-        const result = response.ok ? { ok: true } : { ok: false, error: `Fluxor respondió HTTP ${response.status}.` };
-        await logEvent(result.ok ? "info" : "error", "connection", result.ok ? "Conexión con Fluxor correcta." : result.error);
-        return result;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5_000);
+        try {
+          const response = await fetch(`${BRIDGE_URL}/v1/status`, {
+            headers: { "X-Fluxor-Token": current.token },
+            signal: controller.signal,
+          });
+          const result = response.ok ? { ok: true } : { ok: false, error: `Fluxor respondió HTTP ${response.status}.` };
+          await logEvent(result.ok ? "info" : "error", "connection", result.ok ? "Conexión con Fluxor correcta." : result.error);
+          return result;
+        } finally {
+          clearTimeout(timeout);
+        }
       } catch (error) {
         await logEvent("error", "connection", "Fluxor no está accesible en el bridge local.", { error: error.message });
         return { ok: false, error: error.message || "No se pudo contactar con Fluxor." };

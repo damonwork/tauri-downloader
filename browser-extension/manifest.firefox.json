@@ -13,8 +13,7 @@
       "lib/store.js",
       "lib/capture.js",
       "background.js"
-    ],
-    "persistent": false
+    ]
   },
   "browser_specific_settings": {
     "gecko": {
