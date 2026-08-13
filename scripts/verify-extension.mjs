@@ -89,6 +89,13 @@ const cases = [
     mediaType: "",
   }, "06490543b20b4ab2ebe8dbe95104ba60fcc1e767e3b66b007de379510ef23632.zip"],
   [{
+    url: "https://cdn-lfs.huggingface.co/repos/5f/8b/64/abc/gemma-4-E2B-it-qat-GGUF-MTP-Q4_K_M.gguf?download=1",
+    fileName: "gemma-4-E2B-it-qat-GGUF-MTP-Q4_K_M.gguf",
+    pageUrl: "https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/tree/main/MTP",
+    pageTitle: "MTP · gemma-4-E2B-it-qat-GGUF · Hugging Face",
+    mediaType: "",
+  }, "gemma-4-E2B-it-qat-GGUF-MTP-Q4_K_M.gguf"],
+  [{
     url: "https://example.com/files/Informe Final 2026.pdf",
     fileName: "",
     pageUrl: "https://example.com/files",
