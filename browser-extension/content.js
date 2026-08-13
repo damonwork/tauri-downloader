@@ -29,7 +29,7 @@ function addStyle() {
   if (document.getElementById("fluxor-capture-style")) return;
   const style = document.createElement("style");
   style.id = "fluxor-capture-style";
-  style.textContent = `.${BUTTON_CLASS}{position:absolute;top:12px;right:12px;z-index:2147483647;border:0;border-radius:5px;padding:8px 10px;background:#c2ff5b;color:#10170d;font:700 12px system-ui,sans-serif;box-shadow:0 3px 12px #0008;cursor:pointer;opacity:.9}.${BUTTON_CLASS}:hover{opacity:1;transform:translateY(-1px)}.${BUTTON_CLASS}[data-state=busy]{background:#d3a24d}.${BUTTON_CLASS}[data-state=error]{background:#d98078}`;
+  style.textContent = `.${BUTTON_CLASS}{position:absolute;top:12px;right:12px;z-index:2147483647;border:0;border-radius:5px;padding:8px 10px;background:#c2ff5b;color:#10170d;font:700 12px system-ui,sans-serif;box-shadow:0 3px 12px #0008;cursor:pointer;opacity:.9}.${BUTTON_CLASS}:hover{opacity:1;transform:translateY(-1px)}.${BUTTON_CLASS}[data-state=busy]{background:#d3a24d}.${BUTTON_CLASS}[data-state=warning]{background:#e6bd59;color:#211b08}.${BUTTON_CLASS}[data-state=error]{background:#d98078}`;
   document.documentElement.appendChild(style);
 }
 
@@ -37,15 +37,36 @@ function videoUrl(video) {
   return video.currentSrc || video.src || video.querySelector("source")?.src || "";
 }
 
+function warningLabel(code) {
+  return {
+    missing_token: "Configura el token",
+    bridge_unavailable: "Abre Fluxor",
+    bridge_timeout: "Fluxor no responde",
+    invalid_token: "Revisa el token",
+    extension_unavailable: "Recarga la extensión",
+  }[code] || "Revisa Fluxor";
+}
+
+function resetButton(button) {
+  button.textContent = "Descargar con Fluxor";
+  button.title = "";
+  button.removeAttribute("aria-label");
+  button.dataset.state = "";
+}
+
+function showResult(button, result) {
+  const warning = result?.status === "warning";
+  button.dataset.state = result?.ok ? "" : warning ? "warning" : "error";
+  button.title = result?.ok ? "Descarga enviada a Fluxor" : result?.error || "Error desconocido";
+  button.textContent = result?.ok ? "Enviado a Fluxor" : warning ? warningLabel(result.code) : "Error al enviar";
+  button.setAttribute("aria-label", button.textContent);
+  window.setTimeout(() => resetButton(button), result?.ok || !warning ? 4000 : 7000);
+}
+
 function capture(video, button) {
   const url = videoUrl(video);
   if (!validUrl(url)) {
-    button.dataset.state = "error";
-    button.textContent = "Sin URL";
-    window.setTimeout(() => {
-      button.textContent = "Descargar con Fluxor";
-      button.dataset.state = "";
-    }, 2400);
+    showResult(button, { ok: false, status: "error", error: "El vídeo no tiene una URL válida." });
     return;
   }
   button.dataset.state = "busy";
@@ -62,18 +83,14 @@ function capture(video, button) {
       forceSingleStream: true,
     },
   }).then((result) => {
-    button.dataset.state = result?.ok ? "" : "error";
-    button.title = result?.ok ? "Descarga enviada a Fluxor" : result?.error || "Error desconocido";
-    button.textContent = result?.ok ? "Enviado a Fluxor" : "Error al enviar";
-    window.setTimeout(() => {
-      button.textContent = "Descargar con Fluxor";
-      button.title = "";
-      button.dataset.state = "";
-    }, 2400);
+    showResult(button, result);
   }).catch((error) => {
-    button.dataset.state = "error";
-    button.title = error.message || "No se pudo contactar con la extensión";
-    button.textContent = "Error al enviar";
+    showResult(button, {
+      ok: false,
+      status: "warning",
+      code: "extension_unavailable",
+      error: error.message || "Recarga la extensión para continuar.",
+    });
   });
 }
 

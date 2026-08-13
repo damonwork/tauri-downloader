@@ -199,7 +199,12 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message.type === "testConnection") {
       const current = await settings();
-      if (!current.token) return { ok: false, error: "Falta el token." };
+      if (!current.token) {
+        const result = missingTokenResult();
+        await setBadge("?");
+        await logEvent("warning", "connection", result.error);
+        return result;
+      }
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 5_000);
@@ -208,15 +213,20 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
             headers: { "X-Fluxor-Token": current.token },
             signal: controller.signal,
           });
-          const result = response.ok ? { ok: true } : { ok: false, error: `Fluxor respondió HTTP ${response.status}.` };
-          await logEvent(result.ok ? "info" : "error", "connection", result.ok ? "Conexión con Fluxor correcta." : result.error);
+          const result = response.ok
+            ? { ok: true }
+            : bridgeFailureResult(Object.assign(new Error(`Fluxor respondió HTTP ${response.status}.`), { statusCode: response.status }));
+          await logEvent(result.ok ? "info" : result.status === "warning" ? "warning" : "error", "connection", result.ok ? "Conexión con Fluxor correcta." : result.error);
+          await setBadge(result.ok ? "" : result.status === "warning" ? "?" : "!");
           return result;
         } finally {
           clearTimeout(timeout);
         }
       } catch (error) {
-        await logEvent("error", "connection", "Fluxor no está accesible en el bridge local.", { error: error.message });
-        return { ok: false, error: error.message || "No se pudo contactar con Fluxor." };
+        const result = bridgeFailureResult(error);
+        await logEvent(result.status === "warning" ? "warning" : "error", "connection", result.error, { error: error.message });
+        await setBadge(result.status === "warning" ? "?" : "!");
+        return result;
       }
     }
     return { ok: false, error: "Mensaje no reconocido." };

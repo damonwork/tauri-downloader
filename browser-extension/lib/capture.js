@@ -12,6 +12,50 @@ const recentByUrl = new Map();
 const queuedKeys = new Map();
 const lastMediaLog = new Map();
 
+function missingTokenResult() {
+  return {
+    ok: false,
+    status: "warning",
+    code: "missing_token",
+    error: "Configura el token de Fluxor en la extensión.",
+  };
+}
+
+function bridgeFailureResult(error) {
+  const statusCode = Number(error?.statusCode || error?.status || 0);
+  const message = String(error?.message || "");
+  if (statusCode === 401 || statusCode === 403) {
+    return {
+      ok: false,
+      status: "warning",
+      code: "invalid_token",
+      error: "El token de Fluxor no es válido. Revísalo en la extensión.",
+    };
+  }
+  if (error?.name === "AbortError") {
+    return {
+      ok: false,
+      status: "warning",
+      code: "bridge_timeout",
+      error: "Fluxor no responde. Comprueba que la aplicación esté abierta.",
+    };
+  }
+  if (/failed to fetch|networkerror|network request failed|connection refused/i.test(message)) {
+    return {
+      ok: false,
+      status: "warning",
+      code: "bridge_unavailable",
+      error: "Abre Fluxor para enviar la descarga.",
+    };
+  }
+  return {
+    ok: false,
+    status: "error",
+    code: "bridge_error",
+    error: message || "No se pudo enviar la descarga a Fluxor.",
+  };
+}
+
 // Cola de nombres de artifacts de GitHub Actions: content.js anuncia el clic
 // en el icono de descarga (que sí lleva el nombre real y el href del artifact)
 // antes de que el blob de Azure responda con un nombre con hash. El blob
@@ -131,12 +175,25 @@ async function queueCandidate(candidate) {
     return { ok: false, error: "El enlace multimedia no es HTTP/HTTPS." };
   }
   const current = await settings();
+  const fileName = resolveFileName(candidate);
   if (!current.token) {
-    await setBadge("!");
-    await logEvent("error", "bridge", "Falta el token de conexión con Fluxor.", {
+    await setBadge("?");
+    const result = missingTokenResult();
+    const storedCandidate = {
+      ...candidate,
+      fileName,
+      sentAt: new Date().toISOString(),
+      ok: false,
+      status: result.status,
+      code: result.code,
+      error: result.error,
+    };
+    delete storedCandidate.cookies;
+    await rememberCandidate(storedCandidate);
+    await logEvent("warning", "bridge", result.error, {
       url: diagnosticUrl(candidate.url),
     });
-    return { ok: false, error: "Falta el token. Abre la extensión y configura Fluxor." };
+    return result;
   }
   // La deduplicación protege al recurso, no a la pestaña: la clave es la URL
   // para que todas las vías de captura (medios, descargas, overlay, menú)
@@ -146,7 +203,6 @@ async function queueCandidate(candidate) {
   if (previous && Date.now() - previous < 15_000) return { ok: true, duplicate: true };
   queuedKeys.set(key, Date.now());
   if (queuedKeys.size > 200) queuedKeys.delete(queuedKeys.keys().next().value);
-  const fileName = resolveFileName(candidate);
   const cookies = candidate.cookies?.length ? candidate.cookies : await cookiesForUrl(candidate.url);
   const effectiveCandidate = { ...candidate, fileName, cookies };
   await logEvent("info", "bridge", "Enviando recurso a Fluxor.", {
@@ -176,7 +232,11 @@ async function queueCandidate(candidate) {
         signal: controller.signal,
       });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok || !body.ok) throw new Error(body.error || `Fluxor respondió HTTP ${response.status}.`);
+      if (!response.ok || !body.ok) {
+        const error = new Error(body.error || `Fluxor respondió HTTP ${response.status}.`);
+        error.statusCode = response.status;
+        throw error;
+      }
       await rememberCandidate({ ...effectiveCandidate, sentAt: new Date().toISOString(), ok: true });
       await logEvent("info", "bridge", "Fluxor aceptó la descarga.", {
         fileName: body.data?.fileName || fileName,
@@ -187,14 +247,22 @@ async function queueCandidate(candidate) {
       return { ok: true, item: body.data };
     } catch (error) {
       queuedKeys.delete(key);
-      await rememberCandidate({ ...effectiveCandidate, sentAt: new Date().toISOString(), ok: false, error: error.message });
-      await logEvent("error", "bridge", "No se pudo enviar la descarga a Fluxor.", {
+      const result = bridgeFailureResult(error);
+      await rememberCandidate({
+        ...effectiveCandidate,
+        sentAt: new Date().toISOString(),
+        ok: false,
+        status: result.status,
+        code: result.code,
+        error: result.error,
+      });
+      await logEvent(result.status === "warning" ? "warning" : "error", "bridge", result.error, {
         error: error.message,
         fileName,
         url: diagnosticUrl(candidate.url),
       });
-      await setBadge("!");
-      return { ok: false, error: error.message || "No se pudo contactar con Fluxor." };
+      await setBadge(result.status === "warning" ? "?" : "!");
+      return result;
     } finally {
       clearTimeout(timeout);
     }

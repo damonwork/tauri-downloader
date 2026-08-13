@@ -19,10 +19,10 @@ function render(items) {
   candidates.textContent = "";
   for (const item of items || []) {
     const row = document.createElement("li");
-    row.className = item.ok === true ? "ok" : item.ok === false ? "error" : "detected";
+    row.className = item.ok === true ? "ok" : item.status === "warning" ? "warning" : item.ok === false ? "error" : "detected";
     row.title = item.error || item.url;
     const label = document.createElement("span");
-    label.textContent = `${item.ok === true ? "✓" : item.ok === false ? "!" : "•"} ${item.fileName || item.url}`;
+    label.textContent = `${item.ok === true ? "✓" : item.status === "warning" ? "!" : item.ok === false ? "!" : "•"} ${item.fileName || item.url}`;
     row.appendChild(label);
     if (item.ok !== true) {
       const send = document.createElement("button");
@@ -30,8 +30,15 @@ function render(items) {
       send.textContent = "Enviar";
       send.addEventListener("click", async () => {
         send.disabled = true;
-        const result = await message({ type: "captureCandidate", candidate: item });
-        send.textContent = result.ok ? "Enviado" : "Error";
+        try {
+          const result = await message({ type: "captureCandidate", candidate: item });
+          send.textContent = result?.ok ? "Enviado" : result?.status === "warning" ? "Reintentar" : "Error";
+        } catch (error) {
+          send.textContent = "Reintentar";
+          send.title = error.message || "Recarga la extensión para continuar.";
+        } finally {
+          send.disabled = false;
+        }
       });
       row.appendChild(send);
     }

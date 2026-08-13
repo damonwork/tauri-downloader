@@ -12,6 +12,7 @@ const DEFAULTS = {
 };
 
 const MAX_CANDIDATES = 20;
+let candidateQueue = Promise.resolve();
 
 function extensionApiCall(method, ...args) {
   const result = method(...args);
@@ -29,12 +30,16 @@ async function settings() {
   return { ...DEFAULTS, ...saved };
 }
 
-async function rememberCandidate(candidate) {
-  const current = await settings();
-  const candidates = [candidate, ...(current.candidates || [])]
-    .filter((entry, index, all) => index === all.findIndex((other) => other.url === entry.url))
-    .slice(0, MAX_CANDIDATES);
-  await extensionApiCall(api.storage.local.set.bind(api.storage.local), { candidates });
+function rememberCandidate(candidate) {
+  const operation = candidateQueue.then(async () => {
+    const current = await settings();
+    const candidates = [candidate, ...(current.candidates || [])]
+      .filter((entry, index, all) => index === all.findIndex((other) => other.url === entry.url))
+      .slice(0, MAX_CANDIDATES);
+    await extensionApiCall(api.storage.local.set.bind(api.storage.local), { candidates });
+  });
+  candidateQueue = operation.catch(() => {});
+  return operation;
 }
 
 async function setBadge(text) {

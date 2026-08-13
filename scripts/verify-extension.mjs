@@ -207,4 +207,46 @@ const secondSend = await enqueue();
 assert.strictEqual(firstSend.ok, true, "dedup: el primer envío es aceptado");
 assert.strictEqual(secondSend.duplicate, true, "dedup: el segundo envío del mismo recurso se descarta");
 
-console.log(`verify-extension: OK (${scripts.length} scripts, ${cases.length} fixtures de naming, ${artifactCases.length} fixtures de artifacts, dedup)`);
+const warningContext = vm.createContext({ globalThis: {}, ...webGlobals });
+warningContext.api = browserStub();
+warningContext.fetch = async () => { throw new TypeError("Failed to fetch"); };
+for (const script of ["lib/log.js", "lib/url.js", "lib/naming.js", "lib/store.js", "lib/capture.js"]) {
+  vm.runInContext(readFileSync(join(extension, script), "utf8"), warningContext, { filename: script });
+}
+const unavailable = await vm.runInContext(
+  'queueCandidate({ url: "https://example.com/video.mp4", fileName: "video.mp4" })',
+  warningContext,
+);
+assert.strictEqual(unavailable.status, "warning", "bridge cerrado: se muestra como aviso");
+assert.strictEqual(unavailable.code, "missing_token", "bridge cerrado sin configuración: código de token");
+
+warningContext.api = browserStub({ token: "t" });
+const unavailableWithToken = await vm.runInContext(
+  'queueCandidate({ url: "https://example.com/video-2.mp4", fileName: "video-2.mp4" })',
+  warningContext,
+);
+assert.strictEqual(unavailableWithToken.status, "warning", "bridge cerrado: se muestra como aviso");
+assert.strictEqual(unavailableWithToken.code, "bridge_unavailable", "bridge cerrado: código de indisponibilidad");
+
+const timeout = vm.runInContext(
+  'bridgeFailureResult(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }))',
+  warningContext,
+);
+assert.strictEqual(timeout.status, "warning", "timeout: se muestra como aviso");
+assert.strictEqual(timeout.code, "bridge_timeout", "timeout: código de timeout");
+
+const invalidToken = vm.runInContext(
+  'bridgeFailureResult(Object.assign(new Error("Fluxor respondió HTTP 403."), { statusCode: 403 }))',
+  warningContext,
+);
+assert.strictEqual(invalidToken.status, "warning", "token inválido: se muestra como aviso");
+assert.strictEqual(invalidToken.code, "invalid_token", "token inválido: código de token");
+
+const serverError = vm.runInContext(
+  'bridgeFailureResult(Object.assign(new Error("Fluxor respondió HTTP 500."), { statusCode: 500 }))',
+  warningContext,
+);
+assert.strictEqual(serverError.status, "error", "error HTTP del servidor: se mantiene como error");
+assert.strictEqual(serverError.code, "bridge_error", "error HTTP del servidor: código de error");
+
+console.log(`verify-extension: OK (${scripts.length} scripts, ${cases.length} fixtures de naming, ${artifactCases.length} fixtures de artifacts, dedup, warnings)`);
