@@ -132,6 +132,10 @@ export function useDownloadManager(gateway: DownloadGateway) {
     return execute(() => gateway.control(id, action));
   }
 
+  async function setSpeedLimit(id: string, bytesPerSecond: number): Promise<boolean> {
+    return execute(() => gateway.setSpeedLimit(id, bytesPerSecond));
+  }
+
   async function replaceSource(id: string, source: DownloadSource): Promise<boolean> {
     return execute(() => gateway.replaceSource(id, source));
   }
@@ -170,6 +174,7 @@ export function useDownloadManager(gateway: DownloadGateway) {
     clearDiagnosticLogs,
     revealDownload,
     control,
+    setSpeedLimit,
     replaceSource,
     updateSettings,
     saveProxy,

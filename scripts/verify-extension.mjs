@@ -1,0 +1,106 @@
+// verify-extension.mjs — Verificación de la extensión del navegador.
+// 1) Sintaxis de todos los scripts (node --check).
+// 2) Carga simulada de los módulos en el orden de Chrome (importScripts)
+//    y de Firefox (background.scripts del manifest) con un api stub.
+// 3) Fixtures de naming espejo de src-tauri (browser.rs): si un caso
+//    esperado cambia aquí o allá, este script falla y se detecta el drift.
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import assert from "node:assert";
+import vm from "node:vm";
+
+const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const extension = join(root, "browser-extension");
+
+const scripts = ["background.js", "content.js", "popup.js", "lib/log.js", "lib/url.js", "lib/naming.js", "lib/store.js", "lib/capture.js"];
+for (const script of scripts) {
+  execFileSync(process.execPath, ["--check", join(extension, script)]);
+}
+
+function browserStub() {
+  return {
+    runtime: { lastError: null, onMessage: { addListener() {} } },
+    storage: { local: { get() { return Promise.resolve({}); }, set() { return Promise.resolve(); } } },
+    action: { setBadgeText() { return Promise.resolve(); } },
+    webRequest: {
+      onBeforeSendHeaders: { addListener() {} },
+      onHeadersReceived: { addListener() {} },
+    },
+    downloads: { onCreated: { addListener() {} }, cancel() { return Promise.resolve(); } },
+    tabs: { get() { return Promise.resolve(null); } },
+    cookies: { getAll() { return Promise.resolve([]); } },
+  };
+}
+
+const order = ["lib/log.js", "lib/url.js", "lib/naming.js", "lib/store.js", "lib/capture.js", "background.js"];
+const webGlobals = { URL, URLSearchParams, decodeURIComponent, encodeURIComponent, setTimeout, clearTimeout, console, fetch };
+
+for (const browser of ["chrome", "firefox"]) {
+  const context = vm.createContext({ globalThis: {}, ...webGlobals });
+  context.globalThis.browser = browserStub();
+  for (const script of order) {
+    vm.runInContext(readFileSync(join(extension, script), "utf8"), context, { filename: script });
+  }
+  assert.strictEqual(vm.runInContext("typeof logEvent", context), "function", `${browser}: logEvent cargado`);
+  assert.strictEqual(vm.runInContext("typeof queueCandidate", context), "function", `${browser}: queueCandidate cargado`);
+  assert.strictEqual(vm.runInContext("typeof resolveFileName", context), "function", `${browser}: resolveFileName cargado`);
+  assert.strictEqual(vm.runInContext("BRIDGE_URL", context), "http://127.0.0.1:17846", `${browser}: BRIDGE_URL compartido`);
+}
+
+const context = vm.createContext(webGlobals);
+vm.runInContext(readFileSync(join(extension, "lib/url.js"), "utf8") + readFileSync(join(extension, "lib/naming.js"), "utf8"), context);
+const resolve = (candidate) => vm.runInContext(`resolveFileName(${JSON.stringify(candidate)})`, context);
+const cases = [
+  [{
+    url: "https://re.ironhentai.com/hugging.php",
+    fileName: "",
+    pageUrl: "https://animefenix2.tv/ver/youjo-senki-s2-6",
+    pageTitle: "Ver episodio 6 de Youjo Senki II - MonosChinos",
+    mediaType: "video",
+  }, "Youjo Senki II Episodio 6.mp4"],
+  [{
+    url: "https://site.example/hugging.php",
+    fileName: "hugging.php",
+    pageUrl: "https://site.example/ver/one-piece-1050",
+    pageTitle: "One Piece Episodio 1050 - Subs",
+    mediaType: "video",
+  }, "One Piece Episodio 1050.mp4"],
+  [{
+    url: "https://site.example/hugging.php",
+    fileName: "hugging.php",
+    pageUrl: "https://site.example/ver/aot-12",
+    pageTitle: "Attack on Titan Episodio 12 (1080p)",
+    mediaType: "video",
+  }, "Attack on Titan Episodio 12.mp4"],
+  [{
+    url: "https://site.example/hugging.php",
+    fileName: "hugging.php",
+    pageUrl: "https://site.example/ver/boku-3",
+    pageTitle: "Boku no Hero Academia Episodio 3 v2",
+    mediaType: "video",
+  }, "Boku no Hero Academia Episodio 3.mp4"],
+  [{
+    url: "https://productionresultssa7.blob.core.windows.net/actions-results/fbf0da1c/artifacts/06490543b20b4ab2ebe8dbe95104ba60fcc1e767e3b66b007de379510ef23632.zip",
+    fileName: "06490543b20b4ab2ebe8dbe95104ba60fcc1e767e3b66b007de379510ef23632.zip",
+    pageUrl: "https://github.com/damonwork/tauri-downloader/actions/runs/123",
+    pageTitle: "Workflow run · damonwork/tauri-downloader",
+    mediaType: "",
+  }, "06490543b20b4ab2ebe8dbe95104ba60fcc1e767e3b66b007de379510ef23632.zip"],
+  [{
+    url: "https://example.com/files/Informe Final 2026.pdf",
+    fileName: "",
+    pageUrl: "https://example.com/files",
+    pageTitle: "Informes y documentos",
+    mediaType: "",
+  }, "Informe Final 2026.pdf"],
+];
+
+for (const [candidate, expected] of cases) {
+  const resolved = resolve(candidate);
+  assert.strictEqual(typeof resolved, "string", "resolveFileName debe devolver string siempre");
+  assert.strictEqual(resolved, expected);
+}
+
+console.log(`verify-extension: OK (${scripts.length} scripts, ${cases.length} fixtures de naming)`);

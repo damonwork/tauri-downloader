@@ -40,6 +40,7 @@ pub fn run() {
             commands::reveal_download,
             commands::add_download,
             commands::control_download,
+            commands::set_speed_limit,
             commands::replace_download_source,
             commands::update_settings,
             commands::save_proxy,

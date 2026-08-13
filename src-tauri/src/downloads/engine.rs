@@ -38,6 +38,7 @@ pub struct EngineInput {
     pub item: DownloadItem,
     pub destination_dir: PathBuf,
     pub proxy: ResolvedProxy,
+    pub speed_limit: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 #[derive(Clone, Debug)]

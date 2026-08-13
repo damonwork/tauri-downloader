@@ -1,5 +1,8 @@
 use std::{
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -72,12 +75,12 @@ fn smoothing_alpha(elapsed: Duration) -> f64 {
 
 #[derive(Clone)]
 pub(super) struct BandwidthLimiter {
-    bytes_per_second: u64,
+    bytes_per_second: Arc<AtomicU64>,
     next_available: Arc<Mutex<Instant>>,
 }
 
 impl BandwidthLimiter {
-    pub(super) fn new(bytes_per_second: u64) -> Self {
+    pub(super) fn shared(bytes_per_second: Arc<AtomicU64>) -> Self {
         Self {
             bytes_per_second,
             next_available: Arc::new(Mutex::new(Instant::now())),
@@ -89,7 +92,8 @@ impl BandwidthLimiter {
         bytes: usize,
         cancellation: &CancellationToken,
     ) -> Result<(), EngineError> {
-        if self.bytes_per_second == 0 || bytes == 0 {
+        let bytes_per_second = self.bytes_per_second.load(Ordering::Relaxed);
+        if bytes_per_second == 0 || bytes == 0 {
             return Ok(());
         }
         let wait = {
@@ -98,7 +102,7 @@ impl BandwidthLimiter {
             if *next_available < now {
                 *next_available = now;
             }
-            *next_available += transfer_duration(bytes, self.bytes_per_second);
+            *next_available += transfer_duration(bytes, bytes_per_second);
             next_available.saturating_duration_since(now)
         };
         if wait.is_zero() {

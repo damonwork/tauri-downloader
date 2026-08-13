@@ -16,19 +16,24 @@ El repositorio contiene un MVP funcional:
 - [x] Pausar, reanudar, reiniciar, reintentar manualmente y eliminar.
 - [x] Reanudación validada con `Range` y `Content-Range`, más ETag o Last-Modified cuando están disponibles.
 - [x] Indicador de reanudación con estado independiente del validador de identidad.
+- [x] Flujo único forzado para enlaces firmados: envía `Range: bytes=0-` en la primera solicitud y marca la reanudación como no soportada (CDN de un solo uso).
 - [x] Reemplazo de enlaces vencidos sin perder segmentos parciales compatibles.
 - [x] Headers y cookies específicos por descarga.
-- [x] Perfiles proxy HTTP, HTTPS y SOCKS5.
+- [x] Perfiles proxy HTTP, HTTPS y SOCKS5 con comprobación de salud.
 - [x] Carpeta raíz configurable y subcarpetas por categoría dentro de Descargas del sistema.
 - [x] Configuración individual por descarga: categoría, ruta, segmentos, proxy y credenciales.
 - [x] Límite de velocidad por descarga con valor decimal y unidades KB/s, MB/s o GB/s, aplicado al tráfico agregado de todos sus segmentos.
+- [x] Cambio del límite de velocidad de una descarga activa: se aplica al instante a los segmentos en curso y se conserva al reanudar o reiniciar.
 - [x] Persistencia local atómica de cola, ajustes y perfiles.
+- [x] Registro de diagnóstico persistente: eventos del puente, la cola y las transferencias, con filtro por nivel, copiar y limpiar desde Preferencias.
+- [x] "Mostrar en carpeta" en la descarga completada, con apertura segura en Windows, macOS y Linux.
+- [x] Puente local seguro (127.0.0.1:17846) con token para la extensión del navegador.
 - [x] Interfaz responsive con búsqueda, filtros, inspector y atajos.
 - [x] Vista web persistente para probar la UX sin ejecutar transferencias reales.
+- [x] Extensión de navegador Chrome/Firefox con captura de descargas, medios y envío directo a la cola.
 - [ ] Reintentos automáticos con backoff y clasificación de errores.
 - [ ] Verificación SHA-256 al completar.
 - [ ] Integración con el almacén seguro del sistema para secretos persistentes.
-- [x] Extensión de navegador Chrome/Firefox con captura de descargas y medios.
 - [ ] Auto-update, bandeja del sistema y notificaciones nativas.
 
 ## Separación de capacidades
@@ -105,18 +110,22 @@ docker compose -f compose.preview.yaml up --build -d
 Otros contenedores de esa red pueden acceder a `http://fluxor-preview:4173`. El servicio no
 define `ports` ni `expose`, por lo que no queda accesible directamente desde el host.
 
-Para validar Rust en un contenedor Debian se requieren las dependencias de Tauri/WebKitGTK y
-estos comandos dentro de `src-tauri/`:
+Para validar Rust sin tenerlo instalado, el script `scripts/test-rust-ci.sh` levanta un
+contenedor efímero (Dockerfile.rust-ci) y ejecuta formato, Clippy con `-D warnings`, los tests
+y `cargo check` dentro de él; no deja imágenes ni volúmenes:
 
 ```bash
-cargo fmt --all --check
-cargo check --locked
-cargo test --locked --lib
+./scripts/test-rust-ci.sh
 ```
+
+La extensión del navegador se valida con `npm run verify:extension`: comprueba la sintaxis de
+todos los scripts, simula la carga de módulos en el orden de Chrome (`importScripts`) y de
+Firefox (`background.scripts`) y verifica los casos de nombrado de archivo espejo de los tests
+Rust.
 
 ## Integración continua
 
-- `quality.yaml` valida frontend, pruebas, versiones, formato Rust, Clippy y `cargo check`.
+- `quality.yaml` valida frontend (build, tests, versiones y `verify:extension`), formato Rust, Clippy y `cargo check`.
 - `release.yaml` se ejecuta manualmente desde GitHub Actions y crea el tag a partir de la versión del proyecto.
 - Windows genera instaladores NSIS `.exe` y MSI.
 - Linux genera AppImage y deb.
@@ -157,8 +166,39 @@ seguro del sistema.
 
 El workflow de release adjunta `fluxor-extension-chrome-vX.Y.Z.zip` y
 `fluxor-extension-firefox-vX.Y.Z.zip` al borrador del release. La extensión usa
-WebExtensions compatibles con Chrome y Firefox: captura descargas del navegador,
-observa respuestas multimedia y puede añadir un botón sobre elementos `<video>`.
+WebExtensions compatibles con Chrome y Firefox y está organizada en módulos bajo
+`browser-extension/lib/` (`log`, `url`, `naming`, `store`, `capture`) con un
+`background.js` como punto de entrada; Chrome los carga con `importScripts` y
+Firefox vía `background.scripts` del manifest.
+
+### Funciones de la extensión
+
+- **Captura de descargas del navegador**: intercepta las descargas nativas
+  (`downloads.onCreated`), las envía a Fluxor y cancela la copia del navegador.
+  Aplica también al enlace final tras redirecciones y a archivos genéricos
+  (ZIP, PDF, artifacts, etc.).
+- **Detección de medios**: observa las respuestas multimedia (`onHeadersReceived`)
+  y registra candidatos con su nombre resuelto, estado HTTP y cabeceras; evita
+  repetir la misma detección mientras el reproductor reutilice el mismo enlace.
+- **Botón sobre `<video>`**: añade "Descargar con Fluxor" encima de los
+  reproductores para enviar el vídeo activo directamente.
+- **Nombres de archivo inteligentes**: prioriza el `Content-Disposition`, luego el
+  título de la página para episodios (`Ver episodio N de X - Fansub` y
+  `X Episodio N`), luego el nombre de la URL y el slug de la página; siempre
+  devuelve un nombre sanitizado y nunca aplica el título sobre nombres reales.
+- **Contexto real de la petición**: captura cookies, Referer y User-Agent de la
+  solicitud original (`onBeforeSendHeaders`) y los reutiliza para la descarga.
+- **Enlaces firmados**: detecta URLs firmadas (Policy, Signature, X-Amz, etc.) y
+  fuerza el flujo único con `Range: bytes=0-`, sin segmentar ni prometer pausa.
+- **Deduplicación de envíos**: ignora el mismo enlace durante 15 segundos y
+  extiende la ventana tras un envío exitoso para evitar descargas duplicadas.
+- **Diagnóstico en el popup**: registro de eventos persistente con nivel
+  (Debug/Info/Aviso/Error), filtro, copiar y limpiar; la URL se muestra sin
+  tokens ni firmas.
+- **Historial de capturas**: lista de candidatos con nombre, estado del envío y
+  errores, con botón para limpiarla.
+- **Prueba de conexión y token**: comprueba el puente local desde el popup y
+  guarda el token de autorización.
 
 Para conectarla, abre Preferencias en Fluxor, copia el token del puente local y
 pégalo en el popup de la extensión. El puente solo escucha en `127.0.0.1` y las

@@ -92,6 +92,10 @@ export class TauriDownloadGateway implements DownloadGateway {
     return invoke("control_download", { id, action });
   }
 
+  setSpeedLimit(id: string, bytesPerSecond: number): Promise<void> {
+    return invoke("set_speed_limit", { id, bytesPerSecond });
+  }
+
   replaceSource(id: string, source: DownloadSource): Promise<void> {
     return invoke("replace_download_source", { id, source });
   }

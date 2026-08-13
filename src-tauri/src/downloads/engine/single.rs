@@ -135,7 +135,7 @@ pub(super) async fn run_single(
     let size = response_size(response.headers(), resume_at);
     ensure_same_size(resume_at, &input.item.transfer.size, &size)?;
     let mut output = open_partial(&partial_path, resume_at > 0).await?;
-    let limiter = BandwidthLimiter::new(input.item.speed_limit_bytes);
+    let limiter = BandwidthLimiter::shared(input.speed_limit);
     let mut downloaded = resume_at;
     let mut rate = TransferRateEstimator::new(downloaded, Instant::now());
     let mut last_activity_at = None;

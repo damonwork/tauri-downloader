@@ -63,6 +63,15 @@ pub async fn control_download(
 }
 
 #[tauri::command]
+pub async fn set_speed_limit(
+    manager: State<'_, Arc<DownloadManager>>,
+    id: String,
+    bytes_per_second: u64,
+) -> Result<(), AppError> {
+    manager.set_speed_limit(&id, bytes_per_second).await
+}
+
+#[tauri::command]
 pub async fn replace_download_source(
     manager: State<'_, Arc<DownloadManager>>,
     id: String,

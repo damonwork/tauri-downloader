@@ -58,26 +58,46 @@ fn nonempty(value: Option<String>) -> Option<String> {
 
 fn page_file_name(input: &BrowserDownloadInput, fallback: Option<&str>) -> Option<String> {
     let title = input.page_title.as_deref()?.trim();
-    let lower = title.to_ascii_lowercase();
-    let prefix = "ver episodio ";
-    lower.strip_prefix(prefix)?;
-    let episode_start = prefix.len();
-    let separator = lower[episode_start..].find(" de ")? + episode_start;
-    let episode = title[prefix.len()..separator].trim();
-    let anime_start = separator + " de ".len();
-    let anime = title[anime_start..]
-        .split_once(" - ")
-        .map_or(&title[anime_start..], |(name, _)| name)
-        .trim();
-    if episode.is_empty() || anime.is_empty() {
-        return None;
-    }
+    let (anime, episode) = episode_from_title(title)?;
     let extension = fallback
         .and_then(|value| value.rsplit_once('.'))
         .map(|(_, extension)| extension)
         .filter(|extension| !needs_remote_file_name(&format!("file.{extension}")))
         .unwrap_or("mp4");
     sanitize_detected_file_name(&format!("{anime} Episodio {episode}.{extension}"))
+}
+
+fn episode_from_title(title: &str) -> Option<(String, String)> {
+    let lower = title.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("ver episodio ") {
+        let episode_start = "ver episodio ".len();
+        let separator = rest.find(" de ")? + episode_start;
+        let episode = title[episode_start..separator].trim();
+        let anime_start = separator + " de ".len();
+        let anime = strip_fansub(&title[anime_start..]);
+        if !episode.is_empty() && !anime.is_empty() {
+            return Some((anime.to_owned(), episode.to_owned()));
+        }
+    }
+    if let Some(separator) = lower.find(" episodio ") {
+        let anime = title[..separator].trim();
+        let rest = &lower[separator + " episodio ".len()..];
+        let episode: String = rest
+            .chars()
+            .take_while(|character| character.is_ascii_digit())
+            .collect();
+        if !anime.is_empty() && !episode.is_empty() {
+            return Some((anime.to_owned(), episode));
+        }
+    }
+    None
+}
+
+fn strip_fansub(value: &str) -> &str {
+    value
+        .split_once(" - ")
+        .map_or(value, |(name, _)| name)
+        .trim()
 }
 
 #[cfg(test)]
@@ -128,5 +148,42 @@ mod tests {
         );
 
         assert_eq!(input.file_name, "Youjo Senki II Episodio 6.mp4");
+    }
+
+    #[test]
+    fn page_file_name_matches_episode_title_patterns() {
+        let from_title = |page_title: &str| {
+            create_input(
+                BrowserDownloadInput {
+                    url: "https://site.example/hugging.php".to_owned(),
+                    file_name: Some("hugging.php".to_owned()),
+                    page_url: Some("https://site.example/ver/one-piece-1050".to_owned()),
+                    page_title: Some(page_title.to_owned()),
+                    referrer: None,
+                    user_agent: None,
+                    cookies: Vec::new(),
+                    force_single_stream: true,
+                },
+                &AppSettings::default(),
+            )
+            .file_name
+        };
+        assert_eq!(
+            from_title("Ver episodio 6 de Youjo Senki II - MonosChinos"),
+            "Youjo Senki II Episodio 6.mp4"
+        );
+        assert_eq!(
+            from_title("One Piece Episodio 1050 - Subs"),
+            "One Piece Episodio 1050.mp4"
+        );
+        assert_eq!(
+            from_title("Attack on Titan Episodio 12 (1080p)"),
+            "Attack on Titan Episodio 12.mp4"
+        );
+        assert_eq!(
+            from_title("Boku no Hero Academia Episodio 3 v2"),
+            "Boku no Hero Academia Episodio 3.mp4"
+        );
+        assert_eq!(from_title("Guía de descargas y tutoriales"), "hugging.php");
     }
 }

@@ -209,20 +209,31 @@ pub struct CreateDownloadInput {
 #[serde(rename_all = "camelCase")]
 pub struct BrowserDownloadInput {
     pub url: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
     pub file_name: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
     pub page_url: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
     pub page_title: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
     pub referrer: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
     pub user_agent: Option<String>,
     #[serde(default)]
     pub cookies: Vec<CookieEntry>,
     #[serde(default)]
     pub force_single_stream: bool,
+}
+
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::String(text)) => Some(text),
+        _ => None,
+    })
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -336,7 +347,8 @@ pub struct DownloadProgressEvent {
 #[cfg(test)]
 mod tests {
     use super::{
-        AppSettings, DownloadItem, ResumeSupport, TransferMode, TransferPhase, TransferProgress,
+        AppSettings, BrowserDownloadInput, DownloadItem, ResumeSupport, TransferMode,
+        TransferPhase, TransferProgress,
     };
 
     #[test]
@@ -362,5 +374,31 @@ mod tests {
         assert!(matches!(item.telemetry.phase, TransferPhase::Idle));
         assert!(matches!(item.telemetry.mode, TransferMode::Pending));
         assert!(!item.source.force_single_stream);
+    }
+
+    #[test]
+    fn browser_input_ignores_non_string_metadata() {
+        let input: BrowserDownloadInput = serde_json::from_str(
+            r#"{"url":"https://example.com/file.zip","fileName":true,"pageUrl":123,"pageTitle":false,"forceSingleStream":true}"#,
+        )
+        .unwrap();
+        assert_eq!(input.file_name, None);
+        assert_eq!(input.page_url, None);
+        assert_eq!(input.page_title, None);
+        assert!(input.force_single_stream);
+
+        let input: BrowserDownloadInput = serde_json::from_str(
+            r#"{"url":"https://example.com/file.zip","fileName":{"nested":1},"pageUrl":[1,2],"referrer":null}"#,
+        )
+        .unwrap();
+        assert_eq!(input.file_name, None);
+        assert_eq!(input.page_url, None);
+        assert_eq!(input.referrer, None);
+
+        let input: BrowserDownloadInput = serde_json::from_str(
+            r#"{"url":"https://example.com/file.zip","fileName":"video.mp4"}"#,
+        )
+        .unwrap();
+        assert_eq!(input.file_name.as_deref(), Some("video.mp4"));
     }
 }

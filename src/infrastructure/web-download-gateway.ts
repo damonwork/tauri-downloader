@@ -129,6 +129,14 @@ export class WebDownloadGateway implements DownloadGateway {
     this.commit();
   }
 
+  async setSpeedLimit(idValue: string, bytesPerSecond: number): Promise<void> {
+    const item = this.requireDownload(idValue);
+    if (item.state.kind === "completed") throw new Error("La descarga ya se completó.");
+    item.speedLimitBytes = bytesPerSecond;
+    item.updatedAt = new Date().toISOString();
+    this.commit();
+  }
+
   async replaceSource(idValue: string, source: DownloadSource): Promise<void> {
     const item = this.requireDownload(idValue);
     item.source = previewSource(source);

@@ -133,6 +133,10 @@ async function revealDownload(id: string): Promise<void> {
   await manager.revealDownload(id);
 }
 
+async function setSpeedLimit(id: string, bytes: number): Promise<void> {
+  await manager.setSpeedLimit(id, bytes);
+}
+
 async function replaceSource(id: string, source: DownloadSource): Promise<void> {
   await manager.replaceSource(id, source);
 }
@@ -267,6 +271,7 @@ onBeforeUnmount(() => {
       @action="control(selectedItem.id,$event)"
       @reveal="revealDownload(selectedItem.id)"
       @replace="replaceSource(selectedItem.id,$event)"
+      @set-speed-limit="setSpeedLimit(selectedItem.id,$event)"
     />
 
     <AddDownloadDialog

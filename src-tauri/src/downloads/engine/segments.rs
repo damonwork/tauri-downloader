@@ -199,7 +199,7 @@ pub(super) async fn run_segmented(
     )
     .await?;
 
-    let limiter = BandwidthLimiter::new(input.item.speed_limit_bytes);
+    let limiter = BandwidthLimiter::shared(input.speed_limit);
     let size = TransferSize::Known { total_bytes };
     let resume = ResumeSupport::Supported;
     let mode = TransferMode::Segmented;

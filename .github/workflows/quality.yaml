@@ -43,6 +43,9 @@ jobs:
       - name: Run domain tests
         run: npm test
 
+      - name: Verify browser extension
+        run: npm run verify:extension
+
   rust:
     name: Rust
     runs-on: ubuntu-22.04

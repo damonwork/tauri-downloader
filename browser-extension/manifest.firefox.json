@@ -6,7 +6,14 @@
   "permissions": ["cookies", "downloads", "storage", "tabs", "webRequest"],
   "host_permissions": ["<all_urls>", "http://127.0.0.1:17846/*"],
   "background": {
-    "scripts": ["background.js"],
+    "scripts": [
+      "lib/log.js",
+      "lib/url.js",
+      "lib/naming.js",
+      "lib/store.js",
+      "lib/capture.js",
+      "background.js"
+    ],
     "persistent": false
   },
   "browser_specific_settings": {

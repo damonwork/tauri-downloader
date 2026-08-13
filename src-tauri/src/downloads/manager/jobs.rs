@@ -124,11 +124,13 @@ impl DownloadManager {
         let cancellation = CancellationToken::new();
         let gate = Arc::new(tokio::sync::Notify::new());
         let generation = Uuid::new_v4().to_string();
+        let speed_limit = Arc::new(std::sync::atomic::AtomicU64::new(item.speed_limit_bytes));
         let manager = Arc::clone(self);
         let task_cancellation = cancellation.clone();
         let task_gate = Arc::clone(&gate);
         let task_id = id.clone();
         let task_generation = generation.clone();
+        let task_speed_limit = Arc::clone(&speed_limit);
         let join = tauri::async_runtime::spawn(async move {
             task_gate.notified().await;
             manager
@@ -138,6 +140,7 @@ impl DownloadManager {
                         item,
                         destination_dir,
                         proxy,
+                        speed_limit: task_speed_limit,
                     },
                     task_cancellation,
                 )
@@ -176,17 +179,29 @@ impl DownloadManager {
         }
         starting.remove(&id);
         let replaced = tasks.insert(
-            id,
+            id.clone(),
             TaskControl {
                 generation,
                 cancellation,
                 join,
+                speed_limit: Arc::clone(&speed_limit),
             },
         );
         debug_assert!(replaced.is_none());
         drop(starting);
         drop(stopping);
         drop(tasks);
+        let latest = {
+            let state = self.state.read().await;
+            state
+                .downloads
+                .iter()
+                .find(|download| download.id == id)
+                .map(|download| download.speed_limit_bytes)
+        };
+        if let Some(bytes) = latest {
+            speed_limit.store(bytes, std::sync::atomic::Ordering::Relaxed);
+        }
         gate.notify_one();
     }
 

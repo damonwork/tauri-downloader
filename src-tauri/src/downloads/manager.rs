@@ -49,6 +49,7 @@ struct TaskControl {
     generation: String,
     cancellation: CancellationToken,
     join: JoinHandle<()>,
+    speed_limit: Arc<std::sync::atomic::AtomicU64>,
 }
 
 enum JobFailure {
@@ -140,11 +141,6 @@ impl DownloadManager {
             item.clone()
         };
         let path = self.destination_dir(&item)?.join(&item.file_name);
-        if !tokio::fs::try_exists(&path).await? {
-            return Err(AppError::Validation(
-                "El archivo ya no existe en su ubicación de descarga".to_owned(),
-            ));
-        }
         reveal_path(&path)
     }
 
@@ -235,6 +231,50 @@ impl DownloadManager {
             DownloadAction::Restart => self.restart(id).await,
             DownloadAction::Remove => self.remove(id).await,
         }
+    }
+
+    pub async fn set_speed_limit(&self, id: &str, bytes_per_second: u64) -> Result<(), AppError> {
+        if bytes_per_second > MAX_SPEED_LIMIT_BYTES {
+            return Err(AppError::Validation(
+                "El límite de velocidad supera el máximo permitido".to_owned(),
+            ));
+        }
+        let operation = self.operation_lock(id).await;
+        let _guard = operation.lock().await;
+        let previous = {
+            let mut state = self.state.write().await;
+            let item = find_download_mut(&mut state, id)?;
+            if matches!(&item.state, DownloadState::Completed { .. }) {
+                return Err(AppError::Validation(
+                    "La descarga ya se completó; no puede ajustarse su límite".to_owned(),
+                ));
+            }
+            let previous = item.speed_limit_bytes;
+            item.speed_limit_bytes = bytes_per_second;
+            item.updated_at = Utc::now();
+            state.revision += 1;
+            previous
+        };
+        if let Some(control) = self.tasks.lock().await.get(id) {
+            control
+                .speed_limit
+                .store(bytes_per_second, std::sync::atomic::Ordering::Relaxed);
+        }
+        if let Err(error) = self.commit().await {
+            let mut state = self.state.write().await;
+            if let Ok(item) = find_download_mut(&mut state, id) {
+                item.speed_limit_bytes = previous;
+                item.updated_at = Utc::now();
+                state.revision += 1;
+            }
+            if let Some(control) = self.tasks.lock().await.get(id) {
+                control
+                    .speed_limit
+                    .store(previous, std::sync::atomic::Ordering::Relaxed);
+            }
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub async fn replace_source(&self, id: &str, source: DownloadSource) -> Result<(), AppError> {
@@ -416,9 +456,7 @@ impl DownloadManager {
 
 fn reveal_path(path: &std::path::Path) -> Result<(), AppError> {
     #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("explorer.exe")
-        .arg(format!("/select,{}", path.display()))
-        .spawn();
+    let result = reveal_path_windows(path);
     #[cfg(target_os = "macos")]
     let result = std::process::Command::new("open")
         .arg("-R")
@@ -432,6 +470,21 @@ fn reveal_path(path: &std::path::Path) -> Result<(), AppError> {
     result
         .map(|_| ())
         .map_err(|error| AppError::ExternalOpen(error.to_string()))
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_path_windows(path: &std::path::Path) -> std::io::Result<std::process::Child> {
+    let select = format!("/select,\"{}\"", path.display());
+    match std::process::Command::new("explorer.exe")
+        .arg(&select)
+        .spawn()
+    {
+        Ok(child) => Ok(child),
+        Err(error) => std::process::Command::new("explorer.exe")
+            .arg(path.parent().unwrap_or(path))
+            .spawn()
+            .map_err(|_| error),
+    }
 }
 
 #[cfg(test)]
