@@ -3,16 +3,57 @@ import type { DownloadAction, DownloadItem } from "@/domain/download";
 import DownloadRow from "./DownloadRow.vue";
 import AppIcon from "./AppIcon.vue";
 
-defineProps<{ items: DownloadItem[]; selectedId?: string; filterLabel: string; canReveal: boolean; hasItems: boolean; searchActive: boolean }>();
-const emit = defineEmits<{ select: [id: string]; action: [id: string, action: DownloadAction]; reveal: [id: string]; add: [] }>();
+defineProps<{
+  items: DownloadItem[];
+  selectedId?: string;
+  filterLabel: string;
+  canReveal: boolean;
+  hasItems: boolean;
+  searchActive: boolean;
+}>();
+const emit = defineEmits<{
+  select: [id: string];
+  action: [id: string, action: DownloadAction];
+  reveal: [id: string];
+  add: [];
+}>();
 </script>
 
 <template>
-  <section class="list-panel">
-    <header class="list-header">
-      <div><strong>{{ filterLabel }}</strong><span>{{ items.length }} elementos</span></div>
+  <section
+    class="list-panel [margin:18px_30px_30px] overflow-hidden rounded-lg border border-line bg-surface max-mobile:[margin:14px_16px_82px] @max-[650px]/workspace:mr-4 @max-[650px]/workspace:ml-4"
+  >
+    <header
+      class="list-header flex h-13.5 items-center justify-between border-b border-b-line px-[15px] py-0 max-mobile:h-12 @max-[650px]/workspace:h-12 max-mobile:[&_button]:hidden"
+    >
+      <div>
+        <strong class="text-xs">{{ filterLabel }}</strong><span
+          class="ml-[9px] font-mono text-muted"
+          >{{ items.length }} elementos</span
+        >
+      </div>
     </header>
-    <div v-if="items.length" class="column-labels" aria-hidden="true"><span>ARCHIVO</span><span>ESTADO</span><span>PROGRESO</span><span>TRANSFERENCIA</span><span></span></div>
+    <div
+      v-if="items.length"
+      class="column-labels grid min-h-[31px] download-columns items-center gap-4.5 border-b border-b-line px-[15px] py-0 font-mono tracking-[.12em] text-muted max-mobile:hidden @max-[1100px]/workspace:gap-3 @max-[650px]/workspace:hidden"
+      aria-hidden="true"
+    >
+      <span
+        class="max-[1100px]:[&:nth-child(2)]:hidden @max-[1100px]/workspace:[&:nth-child(2)]:hidden"
+        >ARCHIVO</span
+      ><span
+        class="max-[1100px]:[&:nth-child(2)]:hidden @max-[1100px]/workspace:[&:nth-child(2)]:hidden"
+        >ESTADO</span
+      ><span
+        class="max-[1100px]:[&:nth-child(2)]:hidden @max-[1100px]/workspace:[&:nth-child(2)]:hidden"
+        >PROGRESO</span
+      ><span
+        class="max-[1100px]:[&:nth-child(2)]:hidden @max-[1100px]/workspace:[&:nth-child(2)]:hidden"
+        >TRANSFERENCIA</span
+      ><span
+        class="max-[1100px]:[&:nth-child(2)]:hidden @max-[1100px]/workspace:[&:nth-child(2)]:hidden"
+      ></span>
+    </div>
     <div v-if="items.length" class="rows">
       <DownloadRow
         v-for="item in items"
@@ -25,19 +66,30 @@ const emit = defineEmits<{ select: [id: string]; action: [id: string, action: Do
         @reveal="emit('reveal', item.id)"
       />
     </div>
-    <div v-else class="empty-state">
-      <span><AppIcon name="download" :size="27" /></span>
-      <h2>{{ hasItems ? "Sin resultados" : "No hay descargas aquí" }}</h2>
-      <p>{{ hasItems ? (searchActive ? "Prueba con otro nombre o dominio." : "No hay elementos en este filtro.") : "Pega un enlace o importa un comando cURL para comenzar." }}</p>
-      <button v-if="!hasItems" type="button" @click="emit('add')"><AppIcon name="plus" :size="17" />Añadir descarga</button>
+    <div v-else class="empty-state flex min-h-90 flex-col items-center justify-center text-center">
+      <span class="grid h-14.5 w-14.5 place-items-center rounded-xl bg-surface text-muted"
+        ><AppIcon name="download" :size="27"
+      /></span>
+      <h2 class="[margin:18px_0_5px] text-base">
+        {{ hasItems ? "Sin resultados" : "No hay descargas aquí" }}
+      </h2>
+      <p class="m-0 text-muted">
+        {{
+          hasItems
+            ? searchActive
+              ? "Prueba con otro nombre o dominio."
+              : "No hay elementos en este filtro."
+            : "Pega un enlace o importa un comando cURL para comenzar."
+        }}
+      </p>
+      <button
+        class="mt-5 flex h-[37px] cursor-pointer items-center gap-[7px] rounded-lg border-0 bg-accent px-[13px] py-0 font-bold text-surface"
+        v-if="!hasItems"
+        type="button"
+        @click="emit('add')"
+      >
+        <AppIcon name="plus" :size="17" />Añadir descarga
+      </button>
     </div>
   </section>
 </template>
-
-<style scoped>
-.list-panel { margin:18px 30px 30px;border:1px solid var(--line);border-radius:8px;background:#0d1210;overflow:hidden }.list-header { height:54px;padding:0 15px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between }.list-header strong { font-size:12px }.list-header span { margin-left:9px;color:#7b8580;font:9px var(--mono) }.column-labels { min-height:31px;padding:0 15px;display:grid;grid-template-columns:minmax(255px,1.35fr) 115px minmax(210px,1fr) 125px 104px;gap:18px;align-items:center;border-bottom:1px solid var(--line);color:#7d8882;font:8px var(--mono);letter-spacing:.12em }.empty-state { min-height:360px;display:flex;align-items:center;justify-content:center;flex-direction:column;text-align:center }.empty-state>span{width:58px;height:58px;border-radius:10px;background:#161d1a;color:#65716b;display:grid;place-items:center}.empty-state h2{margin:18px 0 5px;font-size:16px}.empty-state p{margin:0;color:var(--muted);font-size:11px}.empty-state button{margin-top:20px;height:37px;border:0;border-radius:6px;background:var(--accent);color:#10160e;padding:0 13px;display:flex;align-items:center;gap:7px;font-size:10px;font-weight:700;cursor:pointer}
-@media(max-width:1100px){.column-labels{grid-template-columns:minmax(250px,1.3fr) minmax(180px,1fr) 105px 68px}.column-labels span:nth-child(2){display:none}}
-@media(max-width:760px){.list-panel{margin:14px 16px 82px}.column-labels{display:none}.list-header{height:48px}.list-header button{display:none}}
-@container workspace (max-width:1100px){.column-labels{grid-template-columns:minmax(180px,1.3fr) minmax(130px,1fr) 90px 68px;gap:12px}.column-labels span:nth-child(2){display:none}}
-@container workspace (max-width:650px){.list-panel{margin-left:16px;margin-right:16px}.column-labels{display:none}.list-header{height:48px}}
-</style>

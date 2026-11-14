@@ -5,25 +5,37 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc --noEmit && vite build",
+    "build": "npm run build:extension:css && vue-tsc --noEmit && vite build",
     "check:versions": "node scripts/check-version.mjs",
     "preview": "vite preview",
-    "test": "vitest run",
-    "package:extension": "node scripts/package-extension.mjs all",
-    "verify:extension": "node scripts/verify-extension.mjs",
-    "test:watch": "vitest",
-    "tauri": "tauri"
+    "test": "vitest run src",
+    "package:extension": "npm run build:extension:css && node scripts/package-extension.mjs all",
+    "verify:extension": "npm run build:extension:css && node scripts/verify-extension.mjs",
+    "test:watch": "vitest src",
+    "tauri": "tauri",
+    "build:extension:css": "tailwindcss -i browser-extension/styles.css -o browser-extension/generated/popup.css --minify && tailwindcss -i browser-extension/overlay.css -o browser-extension/generated/overlay.css --minify && node scripts/scope-extension-overlay.mjs",
+    "dev:extension:css": "tailwindcss -i browser-extension/styles.css -o browser-extension/generated/popup.css --watch",
+    "predev": "npm run build:extension:css",
+    "format": "prettier --write \"src/**/*.{vue,css}\" \"browser-extension/*.{html,css,js}\" vite.config.ts \"tests/ui/**/*.ts\" playwright.config.ts scripts/scope-extension-overlay.mjs",
+    "format:check": "prettier --check \"src/**/*.{vue,css}\" \"browser-extension/*.{html,css,js}\" vite.config.ts \"tests/ui/**/*.ts\" playwright.config.ts scripts/scope-extension-overlay.mjs",
+    "test:ui": "playwright test"
   },
   "dependencies": {
-    "vue": "^3.5.13",
-    "@tauri-apps/api": "^2"
+    "@tauri-apps/api": "^2",
+    "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@tailwindcss/cli": "^4.3.5",
+    "@tailwindcss/vite": "^4.3.5",
+    "@tauri-apps/cli": "^2",
     "@vitejs/plugin-vue": "^5.2.1",
+    "prettier": "^3.10.1",
+    "prettier-plugin-tailwindcss": "^0.7.4",
+    "tailwindcss": "^4.3.5",
     "typescript": "~5.6.2",
     "vite": "^6.0.3",
     "vitest": "^3.2.4",
-    "vue-tsc": "^2.1.10",
-    "@tauri-apps/cli": "^2"
+    "vue-tsc": "^2.1.10"
   }
 }

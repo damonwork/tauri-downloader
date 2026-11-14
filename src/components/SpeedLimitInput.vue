@@ -17,7 +17,9 @@ const amount = ref<number | undefined>(initial.amount);
 const unit = ref<SpeedUnit>(initial.unit);
 const amountInput = ref<HTMLInputElement>();
 const maxAmount = computed(() => maxAmountForUnit(unit.value));
-const summary = computed(() => model.value === 0 ? "Sin límite" : `Tope: ${formatSpeed(model.value)}`);
+const summary = computed(() =>
+  model.value === 0 ? "Sin límite" : `Tope: ${formatSpeed(model.value)}`,
+);
 
 function updateAmount(event: Event): void {
   const value = (event.target as HTMLInputElement).valueAsNumber;
@@ -47,9 +49,12 @@ function normalizeAmount(): void {
 </script>
 
 <template>
-  <div class="speed-limit-input">
-    <div class="speed-fields">
+  <div class="speed-limit-input w-full min-w-0">
+    <div
+      class="speed-fields grid h-10 grid-cols-[minmax(0,1fr)_78px] overflow-hidden rounded-lg border border-line bg-canvas [transition:border-color_.15s] focus-within:border-muted focus-within:shadow-[0_0_0_1px_rgba(194,255,91,.06)]"
+    >
       <input
+        class="h-full w-full min-w-0 border-0 bg-transparent px-2.5 py-0 font-mono text-foreground outline-none [&::-webkit-inner-spin-button]:opacity-35"
         ref="amountInput"
         :id="`${name}-amount`"
         :name="`${name}-amount`"
@@ -64,14 +69,27 @@ function normalizeAmount(): void {
         @input="updateAmount"
         @blur="normalizeAmount"
       />
-      <select :name="`${name}-unit`" :value="unit" aria-label="Unidad del límite de velocidad" @change="updateUnit">
-        <option v-for="speedUnit in SPEED_UNITS" :key="speedUnit" :value="speedUnit">{{ speedUnit }}/s</option>
+      <select
+        class="h-full min-w-0 cursor-pointer border-0 border-l border-l-line bg-transparent px-[7px] py-0 font-mono text-accent outline-none"
+        :name="`${name}-unit`"
+        :value="unit"
+        aria-label="Unidad del límite de velocidad"
+        @change="updateUnit"
+      >
+        <option
+          class="bg-raised text-foreground"
+          v-for="speedUnit in SPEED_UNITS"
+          :key="speedUnit"
+          :value="speedUnit"
+        >
+          {{ speedUnit }}/s
+        </option>
       </select>
     </div>
-    <small :class="{ unlimited: model === 0 }">{{ summary }} · 0 desactiva el límite</small>
+    <small
+      class="mt-[5px] block font-mono text-muted [&.unlimited]:text-muted"
+      :class="{ unlimited: model === 0 }"
+      >{{ summary }} · 0 desactiva el límite</small
+    >
   </div>
 </template>
-
-<style scoped>
-.speed-limit-input{width:100%;min-width:0}.speed-fields{height:36px;display:grid;grid-template-columns:minmax(0,1fr) 78px;border:1px solid #2c3631;border-radius:6px;background:#0a0f0d;overflow:hidden;transition:border-color .15s}.speed-fields:focus-within{border-color:#536348;box-shadow:0 0 0 1px rgba(194,255,91,.06)}.speed-fields input,.speed-fields select{min-width:0;height:100%;border:0;background:transparent;color:#cbd3cf;outline:0;font:10px var(--mono)}.speed-fields input{width:100%;padding:0 10px}.speed-fields select{padding:0 7px;border-left:1px solid #29322e;color:var(--accent);cursor:pointer}.speed-fields select option{background:#111714;color:#cbd3cf}.speed-limit-input>small{display:block;margin-top:5px;color:#68736d;font:8px var(--mono)}.speed-limit-input>small.unlimited{color:#59635e}input::-webkit-inner-spin-button{opacity:.35}
-</style>

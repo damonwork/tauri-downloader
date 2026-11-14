@@ -1,27 +1,93 @@
 <!doctype html>
 <html lang="es">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Fluxor</title><link rel="stylesheet" href="popup.css"></head>
-<body>
-  <main>
-    <header><img src="icons/icon-32.png" alt="Fluxor" class="brand-icon"><strong>FLUXOR</strong><span>Browser Companion</span></header>
-    <label>Token de conexión<input id="token" type="password" autocomplete="off" placeholder="Pégalo desde Preferencias de Fluxor"></label>
-    <div class="actions"><button id="test" type="button">Probar conexión</button><span id="status"></span></div>
-    <label class="toggle"><input id="autoCapture" type="checkbox"><span>Capturar descargas del navegador</span></label>
-    <label class="toggle"><input id="overlay" type="checkbox"><span>Mostrar botón sobre vídeos</span></label>
-    <label class="toggle"><input id="singleStream" type="checkbox"><span>Una sola conexión (servidores restrictivos)</span></label>
-    <button id="save" class="primary" type="button">Guardar configuración</button>
-    <section>
-      <div class="section-title"><h2>Últimas capturas</h2><button id="clearCandidates" type="button">Limpiar</button></div>
-      <ul id="candidates"></ul>
-    </section>
-    <section>
-      <div class="section-title"><h2>Diagnóstico</h2><div class="section-actions"><button id="copyLogs" type="button">Copiar</button><button id="clearLogs" type="button">Limpiar</button></div></div>
-      <label class="log-filter">Nivel mínimo<select id="logLevel"><option value="debug">Debug</option><option value="info" selected>Info</option><option value="warning">Aviso</option><option value="error">Error</option></select></label>
-      <p class="help">Los errores también aparecen en <code>chrome://extensions</code> → Fluxor → service worker.</p>
-      <p id="copyStatus" class="copy-status"></p>
-      <ul id="logs" class="logs"></ul>
-    </section>
-  </main>
-  <script src="popup.js"></script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Fluxor — Extensión</title>
+    <link rel="stylesheet" href="generated/popup.css" />
+  </head>
+  <body class="w-[380px] max-w-full bg-canvas font-sans text-sm text-foreground">
+    <main class="space-y-5 p-5">
+      <header class="flex items-center gap-3 border-b border-line pb-4">
+        <img src="icons/icon-32.png" alt="" class="size-8 rounded-lg" />
+        <div>
+          <strong class="block tracking-widest text-accent">FLUXOR</strong
+          ><span class="text-xs text-muted">Extensión del navegador</span>
+        </div>
+      </header>
+      <section class="space-y-3" aria-label="Conexión con Fluxor">
+        <label class="block"
+          ><span class="ui-label">Token de conexión</span
+          ><input
+            id="token"
+            class="ui-input font-mono"
+            type="password"
+            autocomplete="off"
+            placeholder="Pégalo desde Preferencias de Fluxor"
+        /></label>
+        <div class="flex items-center gap-3">
+          <button id="test" class="ui-button shrink-0 px-3 text-xs" type="button">
+            Probar conexión</button
+          ><span id="status" class="text-xs text-success" role="status"></span>
+        </div>
+      </section>
+      <section class="space-y-3" aria-label="Opciones de captura">
+        <label class="flex cursor-pointer items-start gap-3"
+          ><input id="autoCapture" class="mt-0.5 size-4 accent-accent" type="checkbox" /><span
+            >Capturar descargas del navegador</span
+          ></label
+        >
+        <label class="flex cursor-pointer items-start gap-3"
+          ><input id="overlay" class="mt-0.5 size-4 accent-accent" type="checkbox" /><span
+            >Mostrar botón sobre vídeos</span
+          ></label
+        >
+        <label class="flex cursor-pointer items-start gap-3"
+          ><input id="singleStream" class="mt-0.5 size-4 accent-accent" type="checkbox" /><span
+            >Una sola conexión<small class="block text-xs text-muted"
+              >Para servidores restrictivos.</small
+            ></span
+          ></label
+        >
+        <button id="save" class="ui-button ui-button-primary w-full" type="button">
+          Guardar configuración
+        </button>
+      </section>
+      <section class="border-t border-line pt-4">
+        <div class="mb-3 flex items-center justify-between gap-2">
+          <h2 class="text-sm font-semibold">Últimas capturas</h2>
+          <button id="clearCandidates" class="ui-button min-h-8 px-3 text-xs" type="button">
+            Limpiar
+          </button>
+        </div>
+        <ul id="candidates" class="max-h-44 overflow-y-auto" aria-label="Capturas recientes"></ul>
+      </section>
+      <section class="border-t border-line pt-4">
+        <div class="mb-3 flex items-center justify-between gap-2">
+          <h2 class="text-sm font-semibold">Diagnóstico</h2>
+          <div class="flex gap-2">
+            <button id="copyLogs" class="ui-button min-h-8 px-3 text-xs" type="button">
+              Copiar</button
+            ><button id="clearLogs" class="ui-button min-h-8 px-3 text-xs" type="button">
+              Limpiar
+            </button>
+          </div>
+        </div>
+        <label class="mb-3 flex items-center justify-between gap-3 text-xs text-muted"
+          >Nivel mínimo<select id="logLevel" class="ui-input min-h-8 w-28 text-xs">
+            <option value="debug">Debug</option>
+            <option value="info" selected>Info</option>
+            <option value="warning">Aviso</option>
+            <option value="error">Error</option>
+          </select></label
+        >
+        <p class="text-xs leading-relaxed text-muted">
+          También puedes consultar los errores en la página de extensiones de tu navegador.
+        </p>
+        <p id="copyStatus" class="my-2 min-h-4 text-xs text-success" role="status"></p>
+        <ul id="logs" class="max-h-56 overflow-y-auto" aria-label="Eventos de diagnóstico"></ul>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
 </html>

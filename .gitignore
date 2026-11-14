@@ -43,3 +43,10 @@ Thumbs.db
 *.exe
 *.msi
 *.AppImage
+
+# Tailwind output for the browser companion
+browser-extension/generated/
+
+# Browser test artifacts
+/playwright-report/
+/test-results/

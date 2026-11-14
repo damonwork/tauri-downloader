@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import type { CreateDownloadInput, DownloadAction, DownloadItem, DownloadSource } from "@/domain/download";
+import type {
+  CreateDownloadInput,
+  DownloadAction,
+  DownloadItem,
+  DownloadSource,
+} from "@/domain/download";
 import type { AppSettings, ProxyProfile } from "@/domain/settings";
 import { formatBytes, hostOf } from "@/domain/format";
 import { createDownloadGateway } from "@/infrastructure/runtime";
@@ -46,20 +51,25 @@ let diagnosticsTimer: number | undefined;
 const counts = computed(() => ({
   all: snapshot.value.downloads.length,
   active: snapshot.value.downloads.filter((item) => item.state.kind === "downloading").length,
-  queued: snapshot.value.downloads.filter((item) => item.state.kind === "queued" || item.state.kind === "paused").length,
+  queued: snapshot.value.downloads.filter(
+    (item) => item.state.kind === "queued" || item.state.kind === "paused",
+  ).length,
   completed: snapshot.value.downloads.filter((item) => item.state.kind === "completed").length,
 }));
 
 const filteredDownloads = computed(() => {
   const query = search.value.trim().toLowerCase();
   return snapshot.value.downloads.filter((item) => {
-    const matchesFilter = filter.value === "all"
-      || (filter.value === "active" && item.state.kind === "downloading")
-      || (filter.value === "queued" && (item.state.kind === "queued" || item.state.kind === "paused"))
-      || (filter.value === "completed" && item.state.kind === "completed");
-    const matchesSearch = !query
-      || item.fileName.toLowerCase().includes(query)
-      || hostOf(item.source.url).toLowerCase().includes(query);
+    const matchesFilter =
+      filter.value === "all" ||
+      (filter.value === "active" && item.state.kind === "downloading") ||
+      (filter.value === "queued" &&
+        (item.state.kind === "queued" || item.state.kind === "paused")) ||
+      (filter.value === "completed" && item.state.kind === "completed");
+    const matchesSearch =
+      !query ||
+      item.fileName.toLowerCase().includes(query) ||
+      hostOf(item.source.url).toLowerCase().includes(query);
     return matchesFilter && matchesSearch;
   });
 });
@@ -68,16 +78,23 @@ const selectedItem = computed<DownloadItem | undefined>(() =>
   snapshot.value.downloads.find((item) => item.id === selectedId.value),
 );
 
-const filterLabel = computed(() => ({
-  all: "Todas las descargas",
-  active: "Transferencias activas",
-  queued: "En espera",
-  completed: "Descargas completadas",
-})[filter.value]);
+const filterLabel = computed(
+  () =>
+    ({
+      all: "Todas las descargas",
+      active: "Transferencias activas",
+      queued: "En espera",
+      completed: "Descargas completadas",
+    })[filter.value],
+);
 
-watch(() => snapshot.value.downloads, (downloads) => {
-  if (selectedId.value && !downloads.some((item) => item.id === selectedId.value)) selectedId.value = undefined;
-});
+watch(
+  () => snapshot.value.downloads,
+  (downloads) => {
+    if (selectedId.value && !downloads.some((item) => item.id === selectedId.value))
+      selectedId.value = undefined;
+  },
+);
 
 watch(showSettings, (open) => {
   if (diagnosticsTimer !== undefined) window.clearInterval(diagnosticsTimer);
@@ -108,7 +125,8 @@ async function control(id: string, action: DownloadAction): Promise<void> {
     requestConfirmation({
       eyebrow: "PROGRESO EN RIESGO",
       title: "¿Pausar sin reanudación?",
-      message: "Este servidor no acepta solicitudes por rango. Si pausas ahora, tendrás que reiniciar la transferencia desde cero.",
+      message:
+        "Este servidor no acepta solicitudes por rango. Si pausas ahora, tendrás que reiniciar la transferencia desde cero.",
       confirmLabel: "Pausar de todos modos",
       tone: "warning",
       action: () => manager.control(id, action),
@@ -224,19 +242,62 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-shell">
-    <SideRail :active="filter" :counts="counts" @filter="setFilter" @settings="showSettings=true" @proxies="showProxies=true" />
-    <main class="workspace" :class="{ 'inspector-open': selectedItem }">
-      <TopBar v-model:search="search" :web-mode="capabilities.runtime === 'web'" @add="showAdd=true" @settings="showSettings=true" @proxies="showProxies=true" />
+  <div
+    class="app-shell flex min-h-screen bg-[radial-gradient(circle_at_54%_-15%,_rgba(65,90,72,.12),_transparent_34%),_#0b100e]"
+  >
+    <SideRail
+      :active="filter"
+      :counts="counts"
+      @filter="setFilter"
+      @settings="showSettings = true"
+      @proxies="showProxies = true"
+    />
+    <main
+      class="workspace @container/workspace relative min-w-0 flex-1 max-mobile:pb-16.5 min-narrow:max-inspector:[&.inspector-open]:mr-83.5"
+      :class="{ 'inspector-open': selectedItem }"
+    >
+      <TopBar
+        v-model:search="search"
+        :web-mode="capabilities.runtime === 'web'"
+        @add="showAdd = true"
+        @settings="showSettings = true"
+        @proxies="showProxies = true"
+      />
 
-      <div v-if="noticeVisible" class="runtime-notice">
+      <div
+        v-if="noticeVisible"
+        class="runtime-notice [margin:14px_30px_0] flex min-h-[43px] items-center gap-[9px] rounded-lg border border-muted bg-[rgba(202,151,64,.035)] px-3 py-2 text-warning max-mobile:[margin:12px_16px_0]"
+      >
         <AppIcon name="bolt" :size="16" />
-        <p><strong>Vista funcional del navegador</strong>La cola y la configuración se guardan localmente; transferencias, cookies y proxies reales se ejecutan exclusivamente en el motor Rust.</p>
-        <button type="button" aria-label="Ocultar aviso" @click="noticeVisible=false"><AppIcon name="close" :size="15" /></button>
+        <p class="m-0 flex-1 text-xs leading-[1.5] text-warning">
+          <strong class="mr-1.5 text-warning max-mobile:block">Vista funcional del navegador</strong
+          >La cola y la configuración se guardan localmente; transferencias, cookies y proxies
+          reales se ejecutan exclusivamente en el motor Rust.
+        </p>
+        <button
+          class="grid h-[27px] w-[27px] cursor-pointer place-items-center border-0 bg-transparent text-muted"
+          type="button"
+          aria-label="Ocultar aviso"
+          @click="noticeVisible = false"
+        >
+          <AppIcon name="close" :size="15" />
+        </button>
       </div>
 
-      <div v-if="lastError.kind === 'message'" class="error-banner" role="alert">
-        <AppIcon name="warning" :size="16" /><p>{{ lastError.message }}</p><button type="button" @click="lastError={kind:'none'}"><AppIcon name="close" :size="15" /></button>
+      <div
+        v-if="lastError.kind === 'message'"
+        class="error-banner [margin:14px_30px_0] flex min-h-[43px] items-center gap-[9px] rounded-lg border border-danger/40 bg-[rgba(220,119,112,.04)] px-3 py-2 text-danger max-mobile:[margin:12px_16px_0]"
+        role="alert"
+      >
+        <AppIcon name="warning" :size="16" />
+        <p class="m-0 flex-1 text-xs leading-[1.5] text-danger">{{ lastError.message }}</p>
+        <button
+          class="grid h-[27px] w-[27px] cursor-pointer place-items-center border-0 bg-transparent text-muted"
+          type="button"
+          @click="lastError = { kind: 'none' }"
+        >
+          <AppIcon name="close" :size="15" />
+        </button>
       </div>
 
       <SummaryStrip :stats="stats" :max-concurrent="snapshot.settings.maxConcurrent" />
@@ -244,7 +305,9 @@ onBeforeUnmount(() => {
         <AppIcon name="warning" :size="25" />
         <h2>No se pudo conectar con el motor</h2>
         <p>La cola guardada no está disponible todavía. Tus descargas no se han eliminado.</p>
-        <button type="button" :disabled="loading" @click="manager.retryInit()">{{ loading ? 'Conectando…' : 'Reintentar conexión' }}</button>
+        <button type="button" :disabled="loading" @click="manager.retryInit()">
+          {{ loading ? "Conectando…" : "Reintentar conexión" }}
+        </button>
       </div>
       <DownloadList
         v-else
@@ -254,24 +317,32 @@ onBeforeUnmount(() => {
         :can-reveal="capabilities.canRevealDownloads"
         :has-items="snapshot.downloads.length > 0"
         :search-active="search.trim().length > 0"
-        @select="selectedId=$event"
+        @select="selectedId = $event"
         @action="control"
         @reveal="revealDownload"
-        @add="showAdd=true"
+        @add="showAdd = true"
       />
 
-      <div v-if="loading && !initializationFailed" class="loading-state"><span></span><p>Sincronizando el motor…</p></div>
+      <div
+        v-if="loading && !initializationFailed"
+        class="loading-state absolute [inset:99px_0_0] z-15 flex flex-col items-center justify-center gap-3 bg-[rgba(11,16,14,.88)] backdrop-blur-[7px] max-mobile:fixed max-mobile:inset-0"
+      >
+        <span
+          class="h-[27px] w-[27px] animate-[fluxor-spin_.8s_linear_infinite] rounded-full border-2 border-line [border-top-color:var(--color-accent)]"
+        ></span>
+        <p class="font-mono tracking-[.08em] text-muted">Sincronizando el motor…</p>
+      </div>
     </main>
 
     <DetailPanel
       v-if="selectedItem"
       :item="selectedItem"
       :can-reveal="capabilities.canRevealDownloads"
-      @close="selectedId=undefined"
-      @action="control(selectedItem.id,$event)"
+      @close="selectedId = undefined"
+      @action="control(selectedItem.id, $event)"
       @reveal="revealDownload(selectedItem.id)"
-      @replace="replaceSource(selectedItem.id,$event)"
-      @set-speed-limit="setSpeedLimit(selectedItem.id,$event)"
+      @replace="replaceSource(selectedItem.id, $event)"
+      @set-speed-limit="setSpeedLimit(selectedItem.id, $event)"
     />
 
     <AddDownloadDialog
@@ -280,7 +351,7 @@ onBeforeUnmount(() => {
       :proxies="snapshot.proxies"
       :native-runtime="capabilities.runtime === 'tauri'"
       :busy="busy"
-      @close="showAdd=false"
+      @close="showAdd = false"
       @submit="addDownload"
     />
     <SettingsDialog
@@ -290,7 +361,7 @@ onBeforeUnmount(() => {
       :browser-integration="browserIntegration"
       :diagnostics="diagnostics"
       :diagnostics-loading="diagnosticsLoading"
-      @close="showSettings=false"
+      @close="showSettings = false"
       @save="saveSettings"
       @refresh-diagnostics="loadDiagnostics"
       @clear-diagnostics="clearDiagnostics"
@@ -300,7 +371,7 @@ onBeforeUnmount(() => {
       :profiles="snapshot.proxies"
       :native-runtime="capabilities.runtime === 'tauri'"
       :busy="busy"
-      @close="showProxies=false"
+      @close="showProxies = false"
       @save="saveProxy"
       @remove="removeProxy"
       @check="manager.checkProxy"

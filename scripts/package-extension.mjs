@@ -23,6 +23,8 @@ for (const browser of browsers) {
   const packageDirectory = join(output, `fluxor-extension-${browser}`);
   await mkdir(packageDirectory, { recursive: true });
   await cp(source, packageDirectory, { recursive: true });
+  await rm(join(packageDirectory, "styles.css"));
+  await rm(join(packageDirectory, "overlay.css"));
   const manifestPath = join(packageDirectory, `manifest.${browser}.json`);
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   manifest.version = version;

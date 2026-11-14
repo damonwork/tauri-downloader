@@ -20,20 +20,22 @@ if (typeof logEvent === "undefined") {
 }
 
 try {
-  api.webRequest.onBeforeSendHeaders.addListener(
-    rememberRequest,
-    { urls: ["<all_urls>"] },
-    ["requestHeaders", "extraHeaders"],
-  );
+  api.webRequest.onBeforeSendHeaders.addListener(rememberRequest, { urls: ["<all_urls>"] }, [
+    "requestHeaders",
+    "extraHeaders",
+  ]);
 } catch (error) {
-  api.webRequest.onBeforeSendHeaders.addListener(
-    rememberRequest,
-    { urls: ["<all_urls>"] },
-    ["requestHeaders"],
+  api.webRequest.onBeforeSendHeaders.addListener(rememberRequest, { urls: ["<all_urls>"] }, [
+    "requestHeaders",
+  ]);
+  void logEvent(
+    "warning",
+    "headers",
+    "El navegador no admite extraHeaders; algunos sitios pueden requerir cookies manuales.",
+    {
+      error: error.message,
+    },
   );
-  void logEvent("warning", "headers", "El navegador no admite extraHeaders; algunos sitios pueden requerir cookies manuales.", {
-    error: error.message,
-  });
 }
 
 api.webRequest.onHeadersReceived.addListener(
@@ -43,16 +45,24 @@ api.webRequest.onHeadersReceived.addListener(
     rememberResponse(details);
     if (!mediaResponse(details)) return;
     const context = requestContext(details);
-    const tab = details.tabId >= 0 && api.tabs?.get
-      ? await extensionApiCall(api.tabs.get.bind(api.tabs), details.tabId).catch(() => null)
-      : null;
+    const tab =
+      details.tabId >= 0 && api.tabs?.get
+        ? await extensionApiCall(api.tabs.get.bind(api.tabs), details.tabId).catch(() => null)
+        : null;
     const location = headerValue(details.responseHeaders, "location");
-    const contentType = headerValue(details.responseHeaders, "content-type").split(";", 1)[0].toLowerCase();
+    const contentType = headerValue(details.responseHeaders, "content-type")
+      .split(";", 1)[0]
+      .toLowerCase();
     const candidate = {
       url: details.url,
-      fileName: fileNameFromDisposition(headerValue(details.responseHeaders, "content-disposition"))
-        || fileNameFromUrl(location || details.url),
-      mediaType: contentType.startsWith("audio/") ? "audio" : contentType.startsWith("video/") ? "video" : "",
+      fileName:
+        fileNameFromDisposition(headerValue(details.responseHeaders, "content-disposition")) ||
+        fileNameFromUrl(location || details.url),
+      mediaType: contentType.startsWith("audio/")
+        ? "audio"
+        : contentType.startsWith("video/")
+          ? "video"
+          : "",
       pageTitle: tab?.title || "",
       pageUrl: tab?.url || context.pageUrl,
       referrer: context.referrer,
@@ -92,13 +102,14 @@ api.downloads.onCreated.addListener(async (download) => {
       tab = await extensionApiCall(api.tabs.get.bind(api.tabs), download.tabId).catch(() => null);
     }
     const href = download.url || "";
-    const pendingName = popPendingArtifact(download.referrer || "", url, href)
-      || popPendingArtifact(tab?.url || context.pageUrl || "", url, href);
+    const pendingName =
+      popPendingArtifact(download.referrer || "", url, href) ||
+      popPendingArtifact(tab?.url || context.pageUrl || "", url, href);
     const fileName = pendingName
       ? safeFileName(/\.zip$/i.test(pendingName) ? pendingName : `${pendingName}.zip`)
-      : fileNameFromDisposition(context.contentDisposition)
-        || optionalFileName(download.filename?.split(/[\\/]/).pop())
-        || fileNameFromUrl(url);
+      : fileNameFromDisposition(context.contentDisposition) ||
+        optionalFileName(download.filename?.split(/[\\/]/).pop()) ||
+        fileNameFromUrl(url);
     const result = await queueCandidate({
       url,
       fileName,
@@ -184,9 +195,11 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { ok: true };
     }
     if (message.type === "clearLogs") {
-      logQueue = logQueue.then(async () => {
-        await extensionApiCall(api.storage.local.set.bind(api.storage.local), { logs: [] });
-      }).catch(() => {});
+      logQueue = logQueue
+        .then(async () => {
+          await extensionApiCall(api.storage.local.set.bind(api.storage.local), { logs: [] });
+        })
+        .catch(() => {});
       await logQueue;
       return { ok: true };
     }
@@ -215,8 +228,16 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
           const result = response.ok
             ? { ok: true }
-            : bridgeFailureResult(Object.assign(new Error(`Fluxor respondió HTTP ${response.status}.`), { statusCode: response.status }));
-          await logEvent(result.ok ? "info" : result.status === "warning" ? "warning" : "error", "connection", result.ok ? "Conexión con Fluxor correcta." : result.error);
+            : bridgeFailureResult(
+                Object.assign(new Error(`Fluxor respondió HTTP ${response.status}.`), {
+                  statusCode: response.status,
+                }),
+              );
+          await logEvent(
+            result.ok ? "info" : result.status === "warning" ? "warning" : "error",
+            "connection",
+            result.ok ? "Conexión con Fluxor correcta." : result.error,
+          );
           await setBadge(result.ok ? "" : result.status === "warning" ? "?" : "!");
           return result;
         } finally {
@@ -224,12 +245,19 @@ api.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
       } catch (error) {
         const result = bridgeFailureResult(error);
-        await logEvent(result.status === "warning" ? "warning" : "error", "connection", result.error, { error: error.message });
+        await logEvent(
+          result.status === "warning" ? "warning" : "error",
+          "connection",
+          result.error,
+          { error: error.message },
+        );
         await setBadge(result.status === "warning" ? "?" : "!");
         return result;
       }
     }
     return { ok: false, error: "Mensaje no reconocido." };
-  })().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message }));
+  })()
+    .then(sendResponse)
+    .catch((error) => sendResponse({ ok: false, error: error.message }));
   return true;
 });

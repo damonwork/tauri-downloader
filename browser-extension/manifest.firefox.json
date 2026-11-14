@@ -2,9 +2,19 @@
   "manifest_version": 3,
   "name": "Fluxor Browser Companion",
   "version": "0.1.5",
-  "description": "Envía descargas y medios del navegador a Fluxor.",
-  "permissions": ["cookies", "contextMenus", "downloads", "storage", "tabs", "webRequest"],
-  "host_permissions": ["<all_urls>", "http://127.0.0.1:17846/*"],
+  "description": "Env\u00eda descargas y medios del navegador a Fluxor.",
+  "permissions": [
+    "cookies",
+    "contextMenus",
+    "downloads",
+    "storage",
+    "tabs",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1:17846/*"
+  ],
   "background": {
     "scripts": [
       "lib/log.js",
@@ -18,7 +28,7 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "fluxor-browser-companion@damonwork.github.io",
-      "strict_min_version": "109.0"
+      "strict_min_version": "128.0"
     }
   },
   "action": {
@@ -33,10 +43,19 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["lib/url.js", "lib/naming.js", "content.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "lib/url.js",
+        "lib/naming.js",
+        "content.js"
+      ],
       "all_frames": true,
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "css": [
+        "generated/overlay.css"
+      ]
     }
   ]
 }
