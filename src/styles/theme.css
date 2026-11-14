@@ -1,0 +1,70 @@
+@theme {
+  --font-sans: "Avenir Next", "Segoe UI", Arial, sans-serif;
+  --font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  --color-canvas: #0b100e;
+  --color-sidebar: #090d0c;
+  --color-surface: #101713;
+  --color-raised: #151f19;
+  --color-elevated: #1d2a22;
+  --color-foreground: #e2ebe5;
+  --color-muted: #9aaca0;
+  --color-line: #304337;
+  --color-accent: #c2ff5b;
+  --color-danger: #f18c86;
+  --color-warning: #e5ba68;
+  --color-video: #f2b77e;
+  --color-document: #7dc5e5;
+  --color-audio: #e9a3cc;
+  --color-info: #b6abf5;
+  --color-success: #7cdbb6;
+}
+
+@keyframes fluxor-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes fluxor-pulse {
+  50% {
+    transform: scaleY(0.45);
+    opacity: 0.4;
+  }
+}
+@keyframes fluxor-indeterminate {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+@keyframes fluxor-connection {
+  to {
+    transform: translateX(15px);
+  }
+}
+@keyframes fluxor-blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@theme {
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1.4;
+  --breakpoint-mobile: 47.5rem;
+  --breakpoint-dialog: 37.5rem;
+  --breakpoint-narrow: 32.5rem;
+  --breakpoint-inspector: 73.75rem;
+}
+
+/* Rows and column headings share the same responsive grid definition. */
+@utility download-columns {
+  grid-template-columns: minmax(180px, 1.35fr) 100px minmax(180px, 1fr) 140px 128px;
+  @container workspace (width < 1100px) {
+    grid-template-columns: minmax(180px, 1.3fr) minmax(130px, 1fr) 100px 128px;
+  }
+  @container workspace (width < 650px) {
+    grid-template-columns: 1fr auto;
+  }
+}

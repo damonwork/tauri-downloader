@@ -20,20 +20,34 @@ function render(items) {
   candidates.textContent = "";
   for (const item of items || []) {
     const row = document.createElement("li");
-    row.className = item.ok === true ? "ok" : item.status === "warning" ? "warning" : item.ok === false ? "error" : "detected";
+    row.className =
+      item.ok === true
+        ? "ok"
+        : item.status === "warning"
+          ? "warning"
+          : item.ok === false
+            ? "error"
+            : "detected";
+    row.className = `flex items-center gap-2 border-b border-line py-3 text-xs ${item.ok === true ? "text-success" : item.status === "warning" ? "text-warning" : item.ok === false ? "text-danger" : "text-muted"}`;
     row.title = item.error || item.url;
     const label = document.createElement("span");
+    label.className = "min-w-0 flex-1 truncate";
     label.textContent = `${item.ok === true ? "✓" : item.status === "warning" ? "!" : item.ok === false ? "!" : "•"} ${item.fileName || item.url}`;
     row.appendChild(label);
     if (item.ok !== true) {
       const send = document.createElement("button");
       send.type = "button";
+      send.className = "ui-button min-h-8 shrink-0 px-3 text-xs";
       send.textContent = "Enviar";
       send.addEventListener("click", async () => {
         send.disabled = true;
         try {
           const result = await message({ type: "captureCandidate", candidate: item });
-          send.textContent = result?.ok ? "Enviado" : result?.status === "warning" ? "Reintentar" : "Error";
+          send.textContent = result?.ok
+            ? "Enviado"
+            : result?.status === "warning"
+              ? "Reintentar"
+              : "Error";
         } catch (error) {
           send.textContent = "Reintentar";
           send.title = error.message || "Recarga la extensión para continuar.";
@@ -47,6 +61,7 @@ function render(items) {
   }
   if (!candidates.children.length) {
     const row = document.createElement("li");
+    row.className = "py-3 text-xs text-muted";
     row.textContent = "Todavía no hay capturas.";
     candidates.appendChild(row);
   }
@@ -61,11 +76,17 @@ function renderLogs(items) {
   logs.textContent = "";
   for (const item of visibleLogs(items)) {
     const row = document.createElement("li");
-    row.className = `log ${item.level || "info"}`;
-    const time = new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    row.className = "border-b border-line py-3 text-xs";
+    const time = new Date(item.at).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
     const summary = document.createElement("strong");
+    summary.className = "block font-mono text-xs text-muted";
     summary.textContent = `${time} · ${item.event || "evento"}`;
     const detail = document.createElement("span");
+    detail.className = `mt-1 block whitespace-normal ${item.level === "error" ? "text-danger" : item.level === "warning" ? "text-warning" : "text-foreground"}`;
     detail.textContent = item.message || "";
     row.title = JSON.stringify(item.details || {}, null, 2);
     row.append(summary, detail);
@@ -73,6 +94,7 @@ function renderLogs(items) {
   }
   if (!logs.children.length) {
     const row = document.createElement("li");
+    row.className = "py-3 text-xs text-muted";
     row.textContent = "Sin eventos todavía.";
     logs.appendChild(row);
   }
@@ -90,13 +112,29 @@ async function load() {
 }
 
 document.getElementById("save").addEventListener("click", async () => {
-  await message({ type: "saveState", state: { token: token.value.trim(), autoCapture: autoCapture.checked, overlay: overlay.checked, singleStream: singleStream.checked } });
+  await message({
+    type: "saveState",
+    state: {
+      token: token.value.trim(),
+      autoCapture: autoCapture.checked,
+      overlay: overlay.checked,
+      singleStream: singleStream.checked,
+    },
+  });
   status.textContent = "Guardado";
 });
 
 document.getElementById("test").addEventListener("click", async () => {
   status.textContent = "Probando...";
-  await message({ type: "saveState", state: { token: token.value.trim(), autoCapture: autoCapture.checked, overlay: overlay.checked, singleStream: singleStream.checked } });
+  await message({
+    type: "saveState",
+    state: {
+      token: token.value.trim(),
+      autoCapture: autoCapture.checked,
+      overlay: overlay.checked,
+      singleStream: singleStream.checked,
+    },
+  });
   const result = await message({ type: "testConnection" });
   status.textContent = result.ok ? "Conectado" : result.error;
   await load();
@@ -114,7 +152,10 @@ document.getElementById("clearCandidates").addEventListener("click", async () =>
 
 document.getElementById("copyLogs").addEventListener("click", async () => {
   const text = visibleLogs(currentLogs)
-    .map((item) => `${item.at} [${String(item.level || "info").toUpperCase()}] ${item.event}: ${item.message}${Object.keys(item.details || {}).length ? ` ${JSON.stringify(item.details)}` : ""}`)
+    .map(
+      (item) =>
+        `${item.at} [${String(item.level || "info").toUpperCase()}] ${item.event}: ${item.message}${Object.keys(item.details || {}).length ? ` ${JSON.stringify(item.details)}` : ""}`,
+    )
     .join("\n");
   try {
     await navigator.clipboard.writeText(text || "Sin eventos para el nivel seleccionado.");
@@ -122,7 +163,9 @@ document.getElementById("copyLogs").addEventListener("click", async () => {
   } catch {
     copyStatus.textContent = "No se pudieron copiar los logs";
   }
-  window.setTimeout(() => { copyStatus.textContent = ""; }, 1800);
+  window.setTimeout(() => {
+    copyStatus.textContent = "";
+  }, 1800);
 });
 
 logLevel.addEventListener("change", () => renderLogs(currentLogs));
@@ -136,4 +179,6 @@ api.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-load().catch((error) => { status.textContent = error.message; });
+load().catch((error) => {
+  status.textContent = error.message;
+});

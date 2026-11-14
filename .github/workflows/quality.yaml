@@ -37,6 +37,28 @@ jobs:
       - name: Type-check and build
         run: npm run build
 
+      - name: Install browser for UI checks
+        run: npx playwright install --with-deps chromium
+
+      - name: Run browser flow and layout checks
+        run: npm run test:ui
+
+      - name: Upload browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-test-diagnostics
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 2
+
+      - name: Check frontend formatting
+        run: npm run format:check
+
+      - name: Package browser extensions
+        run: npm run package:extension
+
       - name: Check package versions
         run: npm run check:versions
 

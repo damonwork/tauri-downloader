@@ -1,12 +1,28 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
-import type { BrowserIntegration, DiagnosticLevel, DiagnosticSnapshot } from "@/application/download-gateway";
+import type {
+  BrowserIntegration,
+  DiagnosticLevel,
+  DiagnosticSnapshot,
+} from "@/application/download-gateway";
 import type { AppSettings, CategoryDirectories } from "@/domain/settings";
 import AppIcon from "./AppIcon.vue";
 import SpeedLimitInput from "./SpeedLimitInput.vue";
 
-const props = defineProps<{ open: boolean; settings: AppSettings; busy: boolean; browserIntegration: BrowserIntegration; diagnostics: DiagnosticSnapshot; diagnosticsLoading: boolean }>();
-const emit = defineEmits<{ close: []; save: [settings: AppSettings]; refreshDiagnostics: []; clearDiagnostics: [] }>();
+const props = defineProps<{
+  open: boolean;
+  settings: AppSettings;
+  busy: boolean;
+  browserIntegration: BrowserIntegration;
+  diagnostics: DiagnosticSnapshot;
+  diagnosticsLoading: boolean;
+}>();
+const emit = defineEmits<{
+  close: [];
+  save: [settings: AppSettings];
+  refreshDiagnostics: [];
+  clearDiagnostics: [];
+}>();
 const form = reactive<AppSettings>(cloneSettings(props.settings));
 const activeSection = ref<"general" | "folders" | "diagnostics">("general");
 const tokenCopied = ref(false);
@@ -15,7 +31,12 @@ const logLevel = ref<DiagnosticLevel>("info");
 const logsCopied = ref(false);
 const logsCopyError = ref(false);
 const levelRank: Record<DiagnosticLevel, number> = { debug: 0, info: 1, warning: 2, error: 3 };
-const levelLabel: Record<DiagnosticLevel, string> = { debug: "DEBUG", info: "INFO", warning: "AVISO", error: "ERROR" };
+const levelLabel: Record<DiagnosticLevel, string> = {
+  debug: "DEBUG",
+  info: "INFO",
+  warning: "AVISO",
+  error: "ERROR",
+};
 const categoryFields: { key: keyof CategoryDirectories; label: string; description: string }[] = [
   { key: "video", label: "Videos", description: "MP4, MKV, MOV, WEBM" },
   { key: "archive", label: "Comprimidos", description: "ZIP, RAR, 7Z, TAR" },
@@ -25,19 +46,21 @@ const categoryFields: { key: keyof CategoryDirectories; label: string; descripti
 ];
 
 const rootIsAbsolute = computed(() => /^[a-zA-Z]:[\\/]|^\//.test(form.downloadDirectory.trim()));
-const rootPreview = computed(() => rootIsAbsolute.value
-  ? form.downloadDirectory
-  : `Descargas / ${form.downloadDirectory}`,
+const rootPreview = computed(() =>
+  rootIsAbsolute.value ? form.downloadDirectory : `Descargas / ${form.downloadDirectory}`,
 );
-const filteredDiagnostics = computed(() => props.diagnostics.entries.filter((entry) =>
-  levelRank[entry.level] >= levelRank[logLevel.value],
-));
+const filteredDiagnostics = computed(() =>
+  props.diagnostics.entries.filter((entry) => levelRank[entry.level] >= levelRank[logLevel.value]),
+);
 
-watch(() => props.open, (open) => {
-  if (!open) return;
-  Object.assign(form, cloneSettings(props.settings));
-  activeSection.value = "general";
-});
+watch(
+  () => props.open,
+  (open) => {
+    if (!open) return;
+    Object.assign(form, cloneSettings(props.settings));
+    activeSection.value = "general";
+  },
+);
 
 function submit(): void {
   emit("save", cloneSettings(form));
@@ -49,17 +72,24 @@ async function copyBrowserToken(): Promise<void> {
     await navigator.clipboard.writeText(props.browserIntegration.token);
     tokenCopied.value = true;
     tokenCopyError.value = false;
-    window.setTimeout(() => { tokenCopied.value = false; }, 1800);
+    window.setTimeout(() => {
+      tokenCopied.value = false;
+    }, 1800);
   } catch {
     tokenCopyError.value = true;
   }
 }
 
 async function copyDiagnosticLogs(): Promise<void> {
-  const text = filteredDiagnostics.value.map((entry) => {
-    const details = Object.keys(entry.details).length ? ` ${JSON.stringify(entry.details)}` : "";
-    return `${entry.at} [${levelLabel[entry.level]}] ${entry.scope}/${entry.event}: ${entry.message}${details}`;
-  }).join("\n") || "Sin eventos para el nivel seleccionado.";
+  const text =
+    filteredDiagnostics.value
+      .map((entry) => {
+        const details = Object.keys(entry.details).length
+          ? ` ${JSON.stringify(entry.details)}`
+          : "";
+        return `${entry.at} [${levelLabel[entry.level]}] ${entry.scope}/${entry.event}: ${entry.message}${details}`;
+      })
+      .join("\n") || "Sin eventos para el nivel seleccionado.";
   try {
     await navigator.clipboard.writeText(text);
     logsCopied.value = true;
@@ -67,11 +97,17 @@ async function copyDiagnosticLogs(): Promise<void> {
   } catch {
     logsCopyError.value = true;
   }
-  window.setTimeout(() => { logsCopied.value = false; }, 1800);
+  window.setTimeout(() => {
+    logsCopied.value = false;
+  }, 1800);
 }
 
 function diagnosticTime(value: string): string {
-  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return new Date(value).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 function cloneSettings(settings: AppSettings): AppSettings {
@@ -89,84 +125,469 @@ function cloneSettings(settings: AppSettings): AppSettings {
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="dialog-backdrop" @mousedown.self="emit('close')">
-      <section class="settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-        <header>
-          <div><p>PREFERENCIAS</p><h2 id="settings-title">Configurar Fluxor</h2></div>
-          <button type="button" aria-label="Cerrar" @click="emit('close')"><AppIcon name="close" /></button>
+    <div v-if="open" class="dialog-backdrop ui-dialog-backdrop" @mousedown.self="emit('close')">
+      <section
+        class="settings-card ui-dialog-card h-[min(760px,calc(100dvh-40px))] max-w-4xl max-dialog:h-[94dvh]"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+      >
+        <header class="ui-dialog-header">
+          <div>
+            <p class="ui-eyebrow">PREFERENCIAS</p>
+            <h2 class="ui-dialog-title" id="settings-title">Configurar Fluxor</h2>
+          </div>
+          <button class="ui-icon-button" type="button" aria-label="Cerrar" @click="emit('close')">
+            <AppIcon name="close" />
+          </button>
         </header>
 
-        <div class="settings-layout">
-          <nav aria-label="Secciones de preferencias">
-            <button type="button" :class="{ active: activeSection === 'general' }" @click="activeSection='general'"><AppIcon name="settings" :size="17" /><span><strong>General</strong><small>Motor y comportamiento</small></span></button>
-            <button type="button" :class="{ active: activeSection === 'folders' }" @click="activeSection='folders'"><AppIcon name="folder" :size="17" /><span><strong>Carpetas</strong><small>Destino por categoría</small></span></button>
-            <button type="button" :class="{ active: activeSection === 'diagnostics' }" @click="activeSection='diagnostics'"><AppIcon name="activity" :size="17" /><span><strong>Diagnóstico</strong><small>Eventos y errores</small></span></button>
+        <div
+          class="settings-layout grid min-h-0 flex-1 grid-cols-[174px_minmax(0,1fr)] overflow-hidden max-[620px]:flex max-[620px]:flex-col"
+        >
+          <nav
+            class="shrink-0 border-r border-line bg-canvas p-3 max-[620px]:grid max-[620px]:grid-cols-3 max-[620px]:gap-2 max-[620px]:border-r-0 max-[620px]:border-b"
+            aria-label="Secciones de preferencias"
+          >
+            <button
+              class="ui-settings-tab"
+              type="button"
+              :class="{ active: activeSection === 'general' }"
+              @click="activeSection = 'general'"
+            >
+              <AppIcon name="settings" :size="17" /><span
+                ><strong class="block text-[inherit]">General</strong
+                ><small class="mt-[3px] block text-muted max-[620px]:hidden"
+                  >Motor y comportamiento</small
+                ></span
+              >
+            </button>
+            <button
+              class="ui-settings-tab"
+              type="button"
+              :class="{ active: activeSection === 'folders' }"
+              @click="activeSection = 'folders'"
+            >
+              <AppIcon name="folder" :size="17" /><span
+                ><strong class="block text-[inherit]">Carpetas</strong
+                ><small class="mt-[3px] block text-muted max-[620px]:hidden"
+                  >Destino por categoría</small
+                ></span
+              >
+            </button>
+            <button
+              class="ui-settings-tab"
+              type="button"
+              :class="{ active: activeSection === 'diagnostics' }"
+              @click="activeSection = 'diagnostics'"
+            >
+              <AppIcon name="activity" :size="17" /><span
+                ><strong class="block text-[inherit]">Diagnóstico</strong
+                ><small class="mt-[3px] block text-muted max-[620px]:hidden"
+                  >Eventos y errores</small
+                ></span
+              >
+            </button>
           </nav>
 
-          <form @submit.prevent="submit">
-            <div class="settings-body">
+          <form
+            class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+            @submit.prevent="submit"
+          >
+            <div class="settings-body min-h-0 flex-1 overflow-y-auto p-6 max-dialog:p-4">
               <section v-if="activeSection === 'general'">
-                <div class="section-heading"><span><AppIcon name="bolt" :size="18" /></span><div><h3>Motor de transferencia</h3><p>Valores predeterminados para nuevas descargas.</p></div></div>
-                <div class="setting-row"><div><strong>Descargas simultáneas</strong><p>Archivos que pueden transferirse al mismo tiempo.</p></div><div class="stepper"><button type="button" @click="form.maxConcurrent=Math.max(1,form.maxConcurrent-1)">−</button><input v-model.number="form.maxConcurrent" name="max-concurrent" type="number" min="1" max="12" /><button type="button" @click="form.maxConcurrent=Math.min(12,form.maxConcurrent+1)">+</button></div></div>
-                <div class="setting-row"><div><strong>Máximo de segmentos</strong><p>Es un límite: Fluxor usa menos si el servidor no los tolera.</p></div><select v-model.number="form.defaultThreads" name="default-threads"><option v-for="value in [1,2,4,6,8,12,16,24,32]" :key="value" :value="value">Hasta {{ value }}</option></select></div>
-                <div class="setting-row"><div><strong>Límite de velocidad</strong><p>Tope agregado predeterminado para cada descarga.</p></div><SpeedLimitInput v-model="form.defaultSpeedLimitBytes" class="setting-speed" name="default-speed-limit" /></div>
-                <label class="toggle-row"><div><strong>Iniciar al añadir</strong><p>Las nuevas transferencias entran directamente en la cola.</p></div><input v-model="form.startImmediately" name="start-immediately" type="checkbox" /><i></i></label>
-                <div class="info-card"><AppIcon name="activity" :size="18" /><p><strong>Configuración individual</strong>Cada descarga puede sobrescribir categoría, destino, segmentos, proxy, cookies y headers desde el diálogo de alta.</p></div>
-                <div class="browser-card">
-                  <div class="browser-card-header">
-                    <span class="browser-card-icon"><AppIcon name="link" :size="17" /></span>
-                    <div class="browser-card-title"><p>PUENTE LOCAL</p><strong>Extensión del navegador</strong></div>
-                    <span class="browser-status" :class="{ offline: !browserIntegration.available }"><i></i>{{ browserIntegration.available ? 'Disponible' : 'No disponible' }}</span>
+                <div class="section-heading mb-[13px] flex items-center gap-[11px]">
+                  <span
+                    class="grid h-9 w-9 place-items-center rounded-lg bg-[rgba(194,255,91,.08)] text-accent"
+                    ><AppIcon name="bolt" :size="18"
+                  /></span>
+                  <div>
+                    <h3 class="m-0 text-sm">Motor de transferencia</h3>
+                    <p class="[margin:4px_0_0] text-muted">
+                      Valores predeterminados para nuevas descargas.
+                    </p>
                   </div>
-                  <p class="browser-card-copy">Conecta Chrome o Firefox para enviar descargas directamente a la cola de Fluxor.</p>
-                  <div v-if="browserIntegration.available" class="browser-token">
-                    <code tabindex="0" title="Selecciona el token para copiarlo manualmente">{{ browserIntegration.token }}</code>
-                    <button type="button" @click="copyBrowserToken"><AppIcon :name="tokenCopied ? 'check' : 'link'" :size="14" />{{ tokenCopied ? 'Copiado' : 'Copiar token' }}</button>
+                </div>
+                <div
+                  class="setting-row flex min-h-20 items-center justify-between gap-6 border-b border-line py-4 max-dialog:flex-col max-dialog:items-stretch max-dialog:gap-3"
+                >
+                  <div>
+                    <strong class="block text-caption">Descargas simultáneas</strong>
+                    <p class="[margin:4px_0_0] text-muted">
+                      Archivos que pueden transferirse al mismo tiempo.
+                    </p>
                   </div>
-                  <small v-if="tokenCopyError" class="browser-copy-error">No se pudo copiar automáticamente. Selecciona el token y cópialo manualmente.</small>
-                  <p v-else class="browser-offline">Inicia el motor de escritorio para activar la conexión.</p>
-                  <small class="browser-card-note">El token se guarda localmente y solo se usa para autorizar el puente en este equipo.</small>
+                  <div
+                    class="stepper grid h-10 w-fit shrink-0 grid-cols-[40px_64px_40px] overflow-hidden rounded-lg border border-line bg-canvas"
+                  >
+                    <button
+                      class="grid size-10 place-items-center text-lg text-muted hover:bg-elevated hover:text-accent"
+                      type="button"
+                      @click="form.maxConcurrent = Math.max(1, form.maxConcurrent - 1)"
+                    >
+                      −</button
+                    ><input
+                      class="h-10 min-w-0 border-x border-line bg-canvas text-center font-mono text-sm text-foreground"
+                      v-model.number="form.maxConcurrent"
+                      name="max-concurrent"
+                      type="number"
+                      min="1"
+                      max="12"
+                    /><button
+                      class="grid size-10 place-items-center text-lg text-muted hover:bg-elevated hover:text-accent"
+                      type="button"
+                      @click="form.maxConcurrent = Math.min(12, form.maxConcurrent + 1)"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                <div
+                  class="setting-row flex min-h-20 items-center justify-between gap-6 border-b border-line py-4 max-dialog:flex-col max-dialog:items-stretch max-dialog:gap-3"
+                >
+                  <div>
+                    <strong class="block text-caption">Máximo de segmentos</strong>
+                    <p class="[margin:4px_0_0] text-muted">
+                      Es un límite: Fluxor usa menos si el servidor no los tolera.
+                    </p>
+                  </div>
+                  <select
+                    class="ui-input"
+                    v-model.number="form.defaultThreads"
+                    name="default-threads"
+                  >
+                    <option
+                      v-for="value in [1, 2, 4, 6, 8, 12, 16, 24, 32]"
+                      :key="value"
+                      :value="value"
+                    >
+                      Hasta {{ value }}
+                    </option>
+                  </select>
+                </div>
+                <div
+                  class="setting-row flex min-h-20 items-center justify-between gap-6 border-b border-line py-4 max-dialog:flex-col max-dialog:items-stretch max-dialog:gap-3"
+                >
+                  <div>
+                    <strong class="block text-caption">Límite de velocidad</strong>
+                    <p class="[margin:4px_0_0] text-muted">
+                      Tope agregado predeterminado para cada descarga.
+                    </p>
+                  </div>
+                  <SpeedLimitInput
+                    v-model="form.defaultSpeedLimitBytes"
+                    class="setting-speed w-47.5 [flex:0_0_190px] max-[620px]:w-42.5 max-[620px]:[flex-basis:170px]"
+                    name="default-speed-limit"
+                  />
+                </div>
+                <label
+                  class="toggle-row relative flex min-h-18 cursor-pointer items-center justify-between gap-5 border-b border-b-line"
+                  ><div>
+                    <strong class="block text-caption">Iniciar al añadir</strong>
+                    <p class="[margin:4px_0_0] text-muted">
+                      Las nuevas transferencias entran directamente en la cola.
+                    </p>
+                  </div>
+                  <input
+                    class="absolute opacity-0"
+                    v-model="form.startImmediately"
+                    name="start-immediately"
+                    type="checkbox" /><i
+                    class="h-[19px] w-8.5 [flex:0_0_auto] rounded-xl bg-line p-[3px] after:block after:h-[13px] after:w-[13px] after:rounded-full after:bg-muted after:content-[''] after:[transition:.2s] [.toggle-row_input:checked+&]:bg-accent [.toggle-row_input:checked+&::after]:[transform:translateX(15px)] [.toggle-row_input:checked+&::after]:bg-surface"
+                  ></i
+                ></label>
+                <div
+                  class="info-card mt-5 flex gap-2.5 rounded-lg border border-line bg-[rgba(194,255,91,.025)] p-[13px] text-accent"
+                >
+                  <AppIcon name="activity" :size="18" />
+                  <p class="m-0 leading-[1.5] text-muted">
+                    <strong class="mb-0.5 block text-muted">Configuración individual</strong>Cada
+                    descarga puede sobrescribir categoría, destino, segmentos, proxy, cookies y
+                    headers desde el diálogo de alta.
+                  </p>
+                </div>
+                <div
+                  class="browser-card mt-4.5 rounded-lg border border-line bg-[linear-gradient(135deg,rgba(194,255,91,.065),rgba(194,255,91,.018))] px-[15px] py-3.5 shadow-[inset_0_1px_rgba(255,255,255,.025)]"
+                >
+                  <div class="browser-card-header flex items-center gap-2.5">
+                    <span
+                      class="browser-card-icon grid h-[31px] w-[31px] [flex:0_0_31px] place-items-center rounded-lg bg-[rgba(194,255,91,.1)] text-accent"
+                      ><AppIcon name="link" :size="17"
+                    /></span>
+                    <div class="browser-card-title min-w-0 flex-1">
+                      <p class="[margin:0_0_3px] font-mono tracking-[.12em] text-muted">
+                        PUENTE LOCAL
+                      </p>
+                      <strong class="block text-foreground">Extensión del navegador</strong>
+                    </div>
+                    <span
+                      class="browser-status flex items-center gap-[5px] font-mono whitespace-nowrap text-success [&.offline]:text-warning"
+                      :class="{ offline: !browserIntegration.available }"
+                      ><i
+                        class="h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)] [.browser-status.offline_&]:bg-danger [.browser-status.offline_&]:shadow-[none]"
+                      ></i
+                      >{{ browserIntegration.available ? "Disponible" : "No disponible" }}</span
+                    >
+                  </div>
+                  <p class="browser-card-copy mx-0 my-3 leading-[1.45] text-muted">
+                    Conecta Chrome o Firefox para enviar descargas directamente a la cola de Fluxor.
+                  </p>
+                  <div
+                    v-if="browserIntegration.available"
+                    class="browser-token flex min-w-0 items-center gap-[7px]"
+                  >
+                    <code
+                      class="min-w-0 flex-1 [cursor:text] overflow-hidden rounded-lg border border-line bg-canvas px-2.5 py-[9px] font-mono tracking-[.02em] text-ellipsis whitespace-nowrap text-success [user-select:all]"
+                      tabindex="0"
+                      title="Selecciona el token para copiarlo manualmente"
+                      >{{ browserIntegration.token }}</code
+                    >
+                    <button
+                      class="flex h-[31px] cursor-pointer items-center gap-[5px] rounded-lg border border-line bg-surface px-[9px] py-0 font-mono whitespace-nowrap text-success hover:border-accent hover:text-accent"
+                      type="button"
+                      @click="copyBrowserToken"
+                    >
+                      <AppIcon :name="tokenCopied ? 'check' : 'link'" :size="14" />{{
+                        tokenCopied ? "Copiado" : "Copiar token"
+                      }}
+                    </button>
+                  </div>
+                  <small
+                    v-if="tokenCopyError"
+                    class="browser-copy-error mt-[7px] block font-mono leading-[1.4] text-danger"
+                    >No se pudo copiar automáticamente. Selecciona el token y cópialo
+                    manualmente.</small
+                  >
+                  <p v-else class="browser-offline mx-0 my-2.5 text-danger">
+                    Inicia el motor de escritorio para activar la conexión.
+                  </p>
+                  <small class="browser-card-note mt-2.5 block font-mono leading-[1.4] text-muted"
+                    >El token se guarda localmente y solo se usa para autorizar el puente en este
+                    equipo.</small
+                  >
                 </div>
               </section>
 
               <section v-else-if="activeSection === 'folders'">
-                <div class="section-heading"><span><AppIcon name="folder" :size="18" /></span><div><h3>Organización de archivos</h3><p>La raíz relativa se crea dentro de Descargas del sistema.</p></div></div>
-                <label class="root-field"><span>CARPETA PRINCIPAL</span><div><AppIcon name="folder" :size="16" /><input v-model="form.downloadDirectory" name="download-directory" placeholder="Fluxor o C:\\Mi ruta" /></div><small>Resultado: {{ rootPreview }}</small></label>
-                <label class="toggle-row organize-toggle"><div><strong>Organizar por categoría</strong><p>Crear automáticamente una subcarpeta según el tipo.</p></div><input v-model="form.organizeByCategory" name="organize-categories" type="checkbox" /><i></i></label>
-                <div class="category-folders" :class="{ disabled: !form.organizeByCategory }">
-                  <label v-for="field in categoryFields" :key="field.key"><span class="category-icon"><AppIcon name="folder" :size="15" /></span><span class="category-copy"><strong>{{ field.label }}</strong><small>{{ field.description }}</small></span><span class="path-prefix">/</span><input v-model="form.categoryDirectories[field.key]" :name="`folder-${field.key}`" :disabled="!form.organizeByCategory" /></label>
+                <div class="section-heading mb-[13px] flex items-center gap-[11px]">
+                  <span
+                    class="grid h-9 w-9 place-items-center rounded-lg bg-[rgba(194,255,91,.08)] text-accent"
+                    ><AppIcon name="folder" :size="18"
+                  /></span>
+                  <div>
+                    <h3 class="m-0 text-sm">Organización de archivos</h3>
+                    <p class="[margin:4px_0_0] text-muted">
+                      La raíz relativa se crea dentro de Descargas del sistema.
+                    </p>
+                  </div>
+                </div>
+                <label
+                  class="root-field mt-4.5 block [&_.app-icon]:absolute [&_.app-icon]:top-2.5 [&_.app-icon]:left-2.5 [&_.app-icon]:text-muted"
+                  ><span class="ui-label">CARPETA PRINCIPAL</span>
+                  <div class="relative">
+                    <AppIcon name="folder" :size="16" /><input
+                      class="ui-input w-full"
+                      v-model="form.downloadDirectory"
+                      name="download-directory"
+                      placeholder="Fluxor o C:\\Mi ruta"
+                    />
+                  </div>
+                  <small class="mt-1.5 block font-mono text-muted"
+                    >Resultado: {{ rootPreview }}</small
+                  ></label
+                >
+                <label
+                  class="toggle-row organize-toggle relative mt-2 flex min-h-15.5 cursor-pointer items-center justify-between gap-5 border-b border-b-line"
+                  ><div>
+                    <strong class="block text-caption">Organizar por categoría</strong>
+                    <p class="[margin:4px_0_0] text-muted">
+                      Crear automáticamente una subcarpeta según el tipo.
+                    </p>
+                  </div>
+                  <input
+                    class="absolute opacity-0"
+                    v-model="form.organizeByCategory"
+                    name="organize-categories"
+                    type="checkbox" /><i
+                    class="h-[19px] w-8.5 [flex:0_0_auto] rounded-xl bg-line p-[3px] after:block after:h-[13px] after:w-[13px] after:rounded-full after:bg-muted after:content-[''] after:[transition:.2s] [.toggle-row_input:checked+&]:bg-accent [.toggle-row_input:checked+&::after]:[transform:translateX(15px)] [.toggle-row_input:checked+&::after]:bg-surface"
+                  ></i
+                ></label>
+                <div
+                  class="category-folders mt-2.5 overflow-hidden rounded-lg border border-line [transition:opacity_.2s] [&.disabled]:opacity-42"
+                  :class="{ disabled: !form.organizeByCategory }"
+                >
+                  <label
+                    class="grid min-h-[53px] grid-cols-[29px_1fr_10px_135px] items-center gap-2 border-b border-b-line px-[9px] py-[7px] last:border-0 max-[620px]:grid-cols-[29px_1fr_8px_105px]"
+                    v-for="field in categoryFields"
+                    :key="field.key"
+                    ><span
+                      class="category-icon grid h-[27px] w-[27px] place-items-center rounded-lg bg-surface text-muted"
+                      ><AppIcon name="folder" :size="15" /></span
+                    ><span class="category-copy"
+                      ><strong class="block text-caption">{{ field.label }}</strong
+                      ><small class="mt-0.5 block text-muted">{{ field.description }}</small></span
+                    ><span class="path-prefix font-mono text-muted">/</span
+                    ><input
+                      class="ui-input w-full"
+                      v-model="form.categoryDirectories[field.key]"
+                      :name="`folder-${field.key}`"
+                      :disabled="!form.organizeByCategory"
+                  /></label>
                 </div>
               </section>
               <section v-else class="diagnostics-section">
-                <div class="section-heading"><span><AppIcon name="activity" :size="18" /></span><div><h3>Registro de diagnóstico</h3><p>Flujo del puente, la cola y las transferencias.</p></div></div>
-                <div class="diagnostic-toolbar">
-                  <label><span>NIVEL MÍNIMO</span><select v-model="logLevel"><option value="debug">Debug</option><option value="info">Info</option><option value="warning">Aviso</option><option value="error">Error</option></select></label>
-                  <div><button type="button" @click="emit('refreshDiagnostics')"><AppIcon name="refresh" :size="13" />{{ diagnosticsLoading ? 'Actualizando…' : 'Actualizar' }}</button><button type="button" @click="copyDiagnosticLogs"><AppIcon name="link" :size="13" />{{ logsCopied ? 'Copiado' : 'Copiar' }}</button><button class="danger" type="button" @click="emit('clearDiagnostics')"><AppIcon name="trash" :size="13" />Limpiar</button></div>
+                <div class="section-heading mb-[13px] flex items-center gap-[11px]">
+                  <span
+                    class="grid h-9 w-9 place-items-center rounded-lg bg-[rgba(194,255,91,.08)] text-accent"
+                    ><AppIcon name="activity" :size="18"
+                  /></span>
+                  <div>
+                    <h3 class="m-0 text-sm">Registro de diagnóstico</h3>
+                    <p class="[margin:4px_0_0] text-muted">
+                      Flujo del puente, la cola y las transferencias.
+                    </p>
+                  </div>
                 </div>
-                <p v-if="logsCopyError" class="diagnostic-copy-error">No se pudieron copiar los logs al portapapeles.</p>
-                <div class="diagnostic-summary"><span><i></i>{{ filteredDiagnostics.length }} eventos visibles</span><small>Se conservan hasta {{ diagnostics.maxEntries }} eventos. Tokens, cookies y firmas se excluyen.</small></div>
-                <div class="diagnostic-list" role="log" aria-label="Registro de diagnóstico">
-                  <article v-for="entry in filteredDiagnostics" :key="entry.id" :class="entry.level">
-                    <div><span>{{ levelLabel[entry.level] }}</span><time>{{ diagnosticTime(entry.at) }}</time><code>{{ entry.scope }}/{{ entry.event }}</code></div>
-                    <p>{{ entry.message }}</p>
-                    <dl v-if="Object.keys(entry.details).length"><template v-for="(value, key) in entry.details" :key="key"><dt>{{ key }}</dt><dd :title="String(value)">{{ value }}</dd></template></dl>
+                <div class="diagnostic-toolbar flex flex-wrap items-end justify-between gap-3">
+                  <label class="block"
+                    ><span class="ui-label">NIVEL MÍNIMO</span
+                    ><select class="ui-input" v-model="logLevel">
+                      <option value="debug">Debug</option>
+                      <option value="info">Info</option>
+                      <option value="warning">Aviso</option>
+                      <option value="error">Error</option>
+                    </select></label
+                  >
+                  <div class="flex gap-1.5">
+                    <button
+                      class="flex h-[35px] cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-raised px-[11px] py-0 text-muted [transition:border-color_.15s,color_.15s] hover:border-line hover:text-foreground"
+                      type="button"
+                      @click="emit('refreshDiagnostics')"
+                    >
+                      <AppIcon name="refresh" :size="13" />{{
+                        diagnosticsLoading ? "Actualizando…" : "Actualizar"
+                      }}</button
+                    ><button
+                      class="flex h-[35px] cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-raised px-[11px] py-0 text-muted [transition:border-color_.15s,color_.15s] hover:border-line hover:text-foreground"
+                      type="button"
+                      @click="copyDiagnosticLogs"
+                    >
+                      <AppIcon name="link" :size="13" />{{
+                        logsCopied ? "Copiado" : "Copiar"
+                      }}</button
+                    ><button
+                      class="danger flex h-[35px] cursor-pointer items-center gap-1.5 rounded-lg border border-line bg-raised px-[11px] py-0 text-danger [transition:border-color_.15s,color_.15s] hover:border-danger/40 hover:text-warning"
+                      type="button"
+                      @click="emit('clearDiagnostics')"
+                    >
+                      <AppIcon name="trash" :size="13" />Limpiar
+                    </button>
+                  </div>
+                </div>
+                <p
+                  v-if="logsCopyError"
+                  class="diagnostic-copy-error [margin:10px_0_0] block font-mono text-danger"
+                >
+                  No se pudieron copiar los logs al portapapeles.
+                </p>
+                <div
+                  class="diagnostic-summary mt-3.5 flex min-h-8.5 items-center justify-between gap-3"
+                >
+                  <span class="flex items-center gap-[7px] whitespace-nowrap text-muted"
+                    ><i
+                      class="h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_8px_var(--color-accent)]"
+                    ></i
+                    >{{ filteredDiagnostics.length }} eventos visibles</span
+                  ><small
+                    class="ml-auto text-right font-mono leading-[1.4] text-muted max-[620px]:hidden"
+                    >Se conservan hasta {{ diagnostics.maxEntries }} eventos. Tokens, cookies y
+                    firmas se excluyen.</small
+                  >
+                </div>
+                <div
+                  class="diagnostic-list mt-2.5 overflow-hidden rounded-lg border border-line bg-canvas"
+                  role="log"
+                  aria-label="Registro de diagnóstico"
+                >
+                  <article
+                    class="border-b border-b-line px-3 py-2.5 last:border-0"
+                    v-for="entry in filteredDiagnostics"
+                    :key="entry.id"
+                    :class="entry.level"
+                  >
+                    <div class="flex min-w-0 items-center gap-2 max-[620px]:flex-wrap">
+                      <span
+                        class="min-w-11 rounded-md bg-surface px-0 py-[3px] text-center font-mono tracking-[.08em] text-success [.diagnostic-list_article.debug>div>&]:bg-surface [.diagnostic-list_article.debug>div>&]:text-muted [.diagnostic-list_article.error>div>&]:bg-line [.diagnostic-list_article.error>div>&]:text-danger [.diagnostic-list_article.warning>div>&]:bg-line [.diagnostic-list_article.warning>div>&]:text-warning"
+                        >{{ levelLabel[entry.level] }}</span><time
+                        class="ml-auto font-mono whitespace-nowrap text-muted max-[620px]:[order:3] max-[620px]:ml-0"
+                        >{{ diagnosticTime(entry.at) }}</time
+                      ><code
+                        class="max-w-[42%] overflow-hidden font-mono text-ellipsis whitespace-nowrap text-muted max-[620px]:[order:4] max-[620px]:max-w-full"
+                        >{{ entry.scope }}/{{ entry.event }}</code
+                      >
+                    </div>
+                    <p class="[margin:7px_0_0] leading-[1.5] wrap-anywhere text-foreground">
+                      {{ entry.message }}
+                    </p>
+                    <dl
+                      class="[margin:7px_0_0] grid grid-cols-[auto_1fr] gap-[3px_12px] border-t border-t-line pt-[7px]"
+                      v-if="Object.keys(entry.details).length"
+                    >
+                      <template v-for="(value, key) in entry.details" :key="key"
+                        ><dt class="font-mono text-muted">{{ key }}</dt>
+                        <dd
+                          class="m-0 min-w-0 overflow-hidden font-mono text-ellipsis whitespace-nowrap text-muted"
+                          :title="String(value)"
+                        >
+                          {{ value }}
+                        </dd></template
+                      >
+                    </dl>
                   </article>
-                  <div v-if="!filteredDiagnostics.length" class="diagnostic-empty"><AppIcon name="activity" :size="22" /><strong>Sin eventos para este nivel</strong><p>Usa la extensión o inicia una descarga para generar actividad.</p></div>
+                  <div
+                    v-if="!filteredDiagnostics.length"
+                    class="diagnostic-empty flex flex-col items-center gap-1.5 px-4.5 py-9 text-center [&_.app-icon]:text-line"
+                  >
+                    <AppIcon name="activity" :size="22" /><strong class="text-muted"
+                      >Sin eventos para este nivel</strong
+                    >
+                    <p class="m-0 leading-[1.5] text-muted">
+                      Usa la extensión o inicia una descarga para generar actividad.
+                    </p>
+                  </div>
                 </div>
               </section>
             </div>
 
-            <footer><p v-if="activeSection === 'folders'"><AppIcon name="shield" :size="14" />Las rutas se validan antes de crear archivos.</p><p v-else-if="activeSection === 'diagnostics'"><AppIcon name="shield" :size="14" />Los diagnósticos pueden incluir rutas locales para investigar fallos de apertura.</p><div><button type="button" @click="emit('close')">{{ activeSection === 'diagnostics' ? 'Cerrar' : 'Cancelar' }}</button><button v-if="activeSection !== 'diagnostics'" class="save" type="submit" :disabled="busy">{{ busy ? 'Guardando…' : 'Guardar cambios' }}</button></div></footer>
+            <footer class="ui-dialog-footer flex-wrap">
+              <p
+                class="m-0 flex items-center gap-1.5 text-muted max-[620px]:hidden"
+                v-if="activeSection === 'folders'"
+              >
+                <AppIcon name="shield" :size="14" />Las rutas se validan antes de crear archivos.
+              </p>
+              <p
+                class="m-0 flex items-center gap-1.5 text-muted max-[620px]:hidden"
+                v-else-if="activeSection === 'diagnostics'"
+              >
+                <AppIcon name="shield" :size="14" />Los diagnósticos pueden incluir rutas locales
+                para investigar fallos de apertura.
+              </p>
+              <div class="ml-auto flex gap-[7px]">
+                <button class="ui-button" type="button" @click="emit('close')">
+                  {{ activeSection === "diagnostics" ? "Cerrar" : "Cancelar" }}</button><button
+                  v-if="activeSection !== 'diagnostics'"
+                  class="save ui-button ui-button-primary"
+                  type="submit"
+                  :disabled="busy"
+                >
+                  {{ busy ? "Guardando…" : "Guardar cambios" }}
+                </button>
+              </div>
+            </footer>
           </form>
         </div>
       </section>
     </div>
   </Teleport>
 </template>
-
-<style scoped>
-.dialog-backdrop{position:fixed;inset:0;z-index:100;background:rgba(2,5,4,.78);backdrop-filter:blur(9px);display:grid;place-items:center;padding:20px}.settings-card{width:min(720px,100%);max-height:calc(100vh - 40px);overflow:hidden;border:1px solid #303a35;border-radius:11px;background:#0e1411;box-shadow:0 30px 100px rgba(0,0,0,.58)}header{height:72px;padding:0 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}header p{margin:0 0 4px;color:#65706a;font:8px var(--mono);letter-spacing:.14em}h2{margin:0;font-size:17px}header>button{width:32px;height:32px;border:0;background:transparent;color:#77817c;cursor:pointer}.settings-layout{display:grid;grid-template-columns:174px 1fr;min-height:500px}.settings-layout>nav{padding:16px 10px;border-right:1px solid var(--line);background:#0b100e}.settings-layout>nav button{width:100%;min-height:54px;padding:9px 10px;border:0;border-radius:7px;background:transparent;color:#6f7974;display:flex;align-items:center;gap:10px;text-align:left;cursor:pointer}.settings-layout>nav button.active{background:#17201b;color:var(--accent);box-shadow:inset 2px 0 var(--accent)}.settings-layout>nav strong,.settings-layout>nav small{display:block}.settings-layout>nav strong{color:inherit;font-size:10px}.settings-layout>nav small{margin-top:3px;color:#5e6863;font-size:8px}.settings-layout>form{min-width:0;display:flex;flex-direction:column}.settings-body{height:437px;padding:21px 24px;overflow:auto}.section-heading{display:flex;align-items:center;gap:11px;margin-bottom:13px}.section-heading>span{width:36px;height:36px;border-radius:7px;background:rgba(194,255,91,.08);color:var(--accent);display:grid;place-items:center}.section-heading h3{margin:0;font-size:13px}.section-heading p{margin:4px 0 0;color:#626c67;font-size:8px}.setting-row,.toggle-row{min-height:72px;border-bottom:1px solid #202824;display:flex;align-items:center;justify-content:space-between;gap:20px}.setting-row strong,.toggle-row strong{display:block;font-size:10px}.setting-row p,.toggle-row p{margin:4px 0 0;color:#606a65;font-size:8px}.setting-row select{width:105px;height:35px;padding:0 8px;border:1px solid #2b3530;border-radius:5px;background:#090e0c;color:#c8d0cc;font-size:9px}.stepper{height:34px;border:1px solid #2b3530;border-radius:5px;display:flex;overflow:hidden}.stepper button{width:29px;border:0;background:#131a17;color:#75817b;cursor:pointer}.stepper input{width:38px;border:0;border-left:1px solid #242e29;border-right:1px solid #242e29;background:#090e0c;color:#d1d8d4;text-align:center;font:10px var(--mono);appearance:textfield}.toggle-row{position:relative;cursor:pointer}.toggle-row input{position:absolute;opacity:0}.toggle-row>i{width:34px;height:19px;padding:3px;border-radius:12px;background:#29322e;flex:0 0 auto}.toggle-row>i::after{content:"";display:block;width:13px;height:13px;border-radius:50%;background:#7a847f;transition:.2s}.toggle-row input:checked+i{background:var(--accent)}.toggle-row input:checked+i::after{transform:translateX(15px);background:#11170f}.info-card{margin-top:20px;padding:13px;border:1px solid #29352e;border-radius:7px;background:rgba(194,255,91,.025);color:var(--accent);display:flex;gap:10px}.info-card p{margin:0;color:#69736e;font-size:8px;line-height:1.5}.info-card strong{display:block;margin-bottom:2px;color:#aab4ae;font-size:9px}.root-field{display:block;margin-top:18px}.root-field>span{display:block;margin-bottom:7px;color:#6d7772;font:8px var(--mono);letter-spacing:.1em}.root-field>div{position:relative}.root-field .app-icon{position:absolute;left:10px;top:10px;color:#69736e}.root-field input{width:100%;height:37px;padding:0 10px 0 34px;border:1px solid #2b3530;border-radius:5px;background:#090e0c;color:#c8d0cc;font:9px var(--mono)}.root-field small{display:block;margin-top:6px;color:#68726d;font:8px var(--mono)}.organize-toggle{min-height:62px;margin-top:8px}.category-folders{margin-top:10px;border:1px solid #222c27;border-radius:7px;overflow:hidden;transition:opacity .2s}.category-folders.disabled{opacity:.42}.category-folders label{min-height:53px;padding:7px 9px;border-bottom:1px solid #202824;display:grid;grid-template-columns:29px 1fr 10px 135px;align-items:center;gap:8px}.category-folders label:last-child{border:0}.category-icon{width:27px;height:27px;border-radius:5px;background:#19211d;color:#79857f;display:grid;place-items:center}.category-copy strong,.category-copy small{display:block}.category-copy strong{font-size:9px}.category-copy small{margin-top:2px;color:#58625d;font-size:7px}.path-prefix{color:#4f5954;font:10px var(--mono)}.category-folders input{width:100%;height:31px;padding:0 8px;border:1px solid #29332e;border-radius:4px;background:#090e0c;color:#b9c2bd;font:9px var(--mono)}footer{height:63px;padding:0 22px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}footer p{margin:0;color:#65706a;font-size:8px;display:flex;align-items:center;gap:6px}footer>div{margin-left:auto;display:flex;gap:7px}footer button{height:34px;padding:0 12px;border:1px solid #29332e;border-radius:6px;background:#121815;color:#87918c;font-size:9px;cursor:pointer}footer button.save{border:0;background:var(--accent);color:#11170f;font-weight:700}
-.setting-speed{width:190px;flex:0 0 190px}.browser-card{margin-top:18px;padding:14px 15px;border:1px solid #2b3930;border-radius:8px;background:linear-gradient(135deg,rgba(194,255,91,.065),rgba(194,255,91,.018));box-shadow:inset 0 1px rgba(255,255,255,.025)}.browser-card-header{display:flex;align-items:center;gap:10px}.browser-card-icon{width:31px;height:31px;border-radius:6px;background:rgba(194,255,91,.1);color:var(--accent);display:grid;place-items:center;flex:0 0 31px}.browser-card-title{min-width:0;flex:1}.browser-card-title p{margin:0 0 3px;color:#65716a;font:8px var(--mono);letter-spacing:.12em}.browser-card-title strong{display:block;color:#cbd5cf;font-size:11px}.browser-status{display:flex;align-items:center;gap:5px;color:#a8d86d;font:8px var(--mono);white-space:nowrap}.browser-status i{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}.browser-status.offline{color:#9b746d}.browser-status.offline i{background:#bd776d;box-shadow:none}.browser-card-copy{margin:12px 0;color:#758078;font-size:9px;line-height:1.45}.browser-token{display:flex;align-items:center;gap:7px;min-width:0}.browser-token code{min-width:0;flex:1;padding:9px 10px;border:1px solid #29362f;border-radius:5px;background:#090e0c;color:#b9d891;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:9px var(--mono);letter-spacing:.02em;cursor:text;user-select:all}.browser-token button{height:31px;padding:0 9px;border:1px solid #3b5034;border-radius:5px;background:#17231a;color:#bce27e;display:flex;align-items:center;gap:5px;font:8px var(--mono);white-space:nowrap;cursor:pointer}.browser-token button:hover{border-color:var(--accent);color:var(--accent)}.browser-offline{margin:10px 0;color:#bd8077;font-size:9px}.browser-copy-error{display:block;margin-top:7px;color:#bd8077;font:8px var(--mono);line-height:1.4}.browser-card-note{display:block;margin-top:10px;color:#52605a;font:8px var(--mono);line-height:1.4}
-.diagnostic-toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}.diagnostic-toolbar>label{display:block}.diagnostic-toolbar>label span{display:block;margin-bottom:6px;color:#6d7772;font:8px var(--mono);letter-spacing:.1em}.diagnostic-toolbar select{width:118px;height:35px;padding:0 8px;border:1px solid #2b3530;border-radius:5px;background:#090e0c;color:#c8d0cc;font-size:9px}.diagnostic-toolbar>div{display:flex;gap:6px}.diagnostic-toolbar button{height:35px;padding:0 11px;border:1px solid #2b3530;border-radius:6px;background:#121815;color:#87918c;display:flex;align-items:center;gap:6px;font-size:9px;cursor:pointer;transition:border-color .15s,color .15s}.diagnostic-toolbar button:hover{border-color:#3a473f;color:#c8d0cc}.diagnostic-toolbar button.danger{border-color:#3a2b28;color:#c98d84}.diagnostic-toolbar button.danger:hover{border-color:#bd776d;color:#e0a49b}.diagnostic-copy-error{display:block;margin:10px 0 0;color:#bd8077;font:8px var(--mono)}.diagnostic-summary{min-height:34px;margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:12px}.diagnostic-summary span{display:flex;align-items:center;gap:7px;color:#8a948e;font-size:9px;white-space:nowrap}.diagnostic-summary span i{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}.diagnostic-summary small{margin-left:auto;color:#55605b;font:8px var(--mono);line-height:1.4;text-align:right}.diagnostic-list{margin-top:10px;border:1px solid #222c27;border-radius:8px;overflow:hidden;background:#0b100e}.diagnostic-list article{padding:10px 12px;border-bottom:1px solid #1d2621}.diagnostic-list article:last-child{border:0}.diagnostic-list article>div{display:flex;align-items:center;gap:8px;min-width:0}.diagnostic-list article>div>span{min-width:44px;padding:3px 0;border-radius:4px;background:#17201b;color:#a8d86d;text-align:center;font:8px var(--mono);letter-spacing:.08em}.diagnostic-list article.debug>div>span{background:#161d1a;color:#7d8983}.diagnostic-list article.warning>div>span{background:#2b2117;color:#d3a24d}.diagnostic-list article.error>div>span{background:#2b1a17;color:#e08d84}.diagnostic-list article time{margin-left:auto;color:#55605b;font:8px var(--mono);white-space:nowrap}.diagnostic-list article code{max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#5f6b65;font:8px var(--mono)}.diagnostic-list article p{margin:7px 0 0;color:#c8d0cc;font-size:9px;line-height:1.5;overflow-wrap:anywhere}.diagnostic-list article dl{margin:7px 0 0;padding-top:7px;border-top:1px solid #1d2621;display:grid;grid-template-columns:auto 1fr;gap:3px 12px}.diagnostic-list dt{color:#5f6b65;font:8px var(--mono)}.diagnostic-list dd{margin:0;min-width:0;color:#8f9a94;font:8px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.diagnostic-empty{padding:36px 18px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}.diagnostic-empty .app-icon{color:#46514b}.diagnostic-empty strong{color:#8a948e;font-size:10px}.diagnostic-empty p{margin:0;color:#55605b;font-size:8px;line-height:1.5}
-@media(max-width:620px){.dialog-backdrop{padding:0;align-items:end}.settings-card{max-height:95vh;border-radius:12px 12px 0 0}.settings-layout{display:block}.settings-layout>nav{padding:8px 14px;border:0;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr 1fr;gap:6px}.settings-layout>nav button{min-height:45px}.settings-body{height:calc(95vh - 190px);padding:18px}.category-folders label{grid-template-columns:29px 1fr 8px 105px}footer p{display:none}.setting-speed{width:170px;flex-basis:170px}.diagnostic-summary small{display:none}.diagnostic-list article>div{flex-wrap:wrap}.diagnostic-list article code{max-width:100%;order:4}.diagnostic-list article time{margin-left:0;order:3}}
-</style>

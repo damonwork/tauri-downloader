@@ -133,6 +133,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install locked dependencies
+        run: npm ci
+
       - name: Package Chrome and Firefox extensions
         run: npm run package:extension
 

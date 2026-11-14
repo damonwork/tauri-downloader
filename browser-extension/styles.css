@@ -1,0 +1,14 @@
+/* Compiled locally; extension packages never load styles from a CDN. */
+@import "tailwindcss" source(none);
+@source "./popup.html";
+@source "./popup.js";
+@import "../src/styles/theme.css";
+@import "../src/styles/base.css";
+@import "../src/styles/components.css";
+
+@layer base {
+  html,
+  body {
+    min-height: 0;
+  }
+}

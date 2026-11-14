@@ -1,6 +1,6 @@
 # Fluxor
 
-Gestor de descargas de escritorio construido con **Tauri 2, Rust, Vue 3 y TypeScript**.
+Gestor de descargas de escritorio construido con **Tauri 2, Rust, Vue 3, TypeScript y Tailwind CSS 4**.
 Su objetivo es ofrecer descargas segmentadas, reanudación segura, credenciales por enlace,
 importación de `curl` y perfiles proxy con una interfaz sencilla.
 
@@ -98,6 +98,23 @@ por Tauri 2.
 npm run tauri dev
 npm run tauri build
 ```
+
+## Estilos y organización visual
+
+La aplicación y la extensión usan Tailwind CSS 4, con colores, tipografía y controles
+compartidos. Los componentes Vue contienen las utilidades de distribución y estado;
+`src/styles/` concentra el tema y las piezas reutilizables. Consulta
+[`docs/STYLING.md`](docs/STYLING.md) antes de añadir o cambiar estilos.
+
+```bash
+npm run format          # formatea y ordena las clases Tailwind
+npm run format:check    # misma comprobación que CI
+npm run build && npm run test:ui # flujos y distribución con Playwright
+npm run dev:extension:css # recompila el popup al editarlo
+```
+
+`npm run build`, `npm run dev` y `npm run package:extension` preparan el CSS del popup.
+`browser-extension/generated/` es salida compilada, no se edita ni se versiona.
 
 ## Pruebas del motor sin interfaz gráfica
 

@@ -1,0 +1,11 @@
+/* No preflight on third-party pages; prefixed tokens avoid host theme collisions. */
+@import "tailwindcss/theme.css" layer(theme) prefix(fluxor);
+@import "tailwindcss/utilities.css" layer(utilities) prefix(fluxor) source(none);
+@import "../src/styles/theme.css";
+
+.fluxor-capture-button {
+  @apply fluxor:absolute fluxor:top-3 fluxor:right-3 fluxor:z-[2147483647] fluxor:cursor-pointer fluxor:rounded-lg fluxor:border-0 fluxor:bg-accent fluxor:px-3 fluxor:py-2 fluxor:font-sans fluxor:text-xs fluxor:font-bold fluxor:text-canvas fluxor:opacity-90 fluxor:shadow-lg;
+  @apply fluxor:hover:-translate-y-px fluxor:hover:opacity-100;
+  @apply fluxor:data-[state=busy]:bg-warning fluxor:data-[state=warning]:bg-warning fluxor:data-[state=error]:bg-danger;
+  @apply fluxor:focus-visible:outline-2 fluxor:focus-visible:outline-offset-2 fluxor:focus-visible:outline-accent;
+}

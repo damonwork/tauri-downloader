@@ -9,26 +9,44 @@ import SegmentMonitor from "./SegmentMonitor.vue";
 import SpeedLimitInput from "./SpeedLimitInput.vue";
 
 const props = defineProps<{ item: DownloadItem; canReveal: boolean }>();
-const emit = defineEmits<{ close: []; action: [action: DownloadAction]; reveal: []; replace: [source: DownloadSource]; setSpeedLimit: [bytes: number] }>();
+const emit = defineEmits<{
+  close: [];
+  action: [action: DownloadAction];
+  reveal: [];
+  replace: [source: DownloadSource];
+  setSpeedLimit: [bytes: number];
+}>();
 const replacing = ref(false);
 const replacement = ref("");
 const replacementError = ref("");
 const speedLimitDraft = ref(props.item.speedLimitBytes);
 const speedLimitApplied = ref(false);
 
-watch(() => props.item.id, () => {
-  replacing.value = false;
-  replacement.value = "";
-  replacementError.value = "";
-  speedLimitDraft.value = props.item.speedLimitBytes;
-  speedLimitApplied.value = false;
-}, { immediate: true });
+watch(
+  () => props.item.id,
+  () => {
+    replacing.value = false;
+    replacement.value = "";
+    replacementError.value = "";
+    speedLimitDraft.value = props.item.speedLimitBytes;
+    speedLimitApplied.value = false;
+  },
+  { immediate: true },
+);
 
-const total = computed(() => props.item.transfer.size.kind === "known" ? props.item.transfer.size.totalBytes : undefined);
-const speed = computed(() => props.item.state.kind === "downloading" ? props.item.state.speedBytes : 0);
+const total = computed(() =>
+  props.item.transfer.size.kind === "known" ? props.item.transfer.size.totalBytes : undefined,
+);
+const speed = computed(() =>
+  props.item.state.kind === "downloading" ? props.item.state.speedBytes : 0,
+);
 const progressKnown = computed(() => props.item.transfer.size.kind === "known");
-const progressIndeterminate = computed(() => !progressKnown.value && props.item.state.kind === "downloading");
-const visualProgress = computed(() => progressKnown.value ? progressOf(props.item) : props.item.state.kind === "completed" ? 100 : 0);
+const progressIndeterminate = computed(
+  () => !progressKnown.value && props.item.state.kind === "downloading",
+);
+const visualProgress = computed(() =>
+  progressKnown.value ? progressOf(props.item) : props.item.state.kind === "completed" ? 100 : 0,
+);
 const progressLabel = computed(() => {
   if (progressKnown.value) return `${progressOf(props.item)}%`;
   if (props.item.state.kind === "downloading") return "En curso";
@@ -36,39 +54,63 @@ const progressLabel = computed(() => {
   if (props.item.state.kind === "queued") return "Pendiente";
   return "Sin tamaño";
 });
-const controlsLocked = computed(() =>
-  props.item.state.kind === "downloading" && ["merging", "finalizing"].includes(props.item.telemetry.phase),
+const controlsLocked = computed(
+  () =>
+    props.item.state.kind === "downloading" &&
+    ["merging", "finalizing"].includes(props.item.telemetry.phase),
 );
-const stateLabel = computed(() => ({
-  queued: "En cola",
-  downloading: "Descargando",
-  paused: "Pausada",
-  completed: "Completada",
-  failed: "Error",
-})[props.item.state.kind]);
+const stateLabel = computed(
+  () =>
+    ({
+      queued: "En cola",
+      downloading: "Descargando",
+      paused: "Pausada",
+      completed: "Completada",
+      failed: "Error",
+    })[props.item.state.kind],
+);
 const validatorLabel = computed(() => {
   if (props.item.transfer.validator.kind === "none") return "Sin validador";
-  return props.item.transfer.validator.kind === "etag" ? "ETag verificado" : "Last-Modified verificado";
+  return props.item.transfer.validator.kind === "etag"
+    ? "ETag verificado"
+    : "Last-Modified verificado";
 });
 const resumeMeta = computed(() => {
   switch (props.item.transfer.resume.kind) {
-    case "supported": return {
-      label: "Reanudable",
-      detail: props.item.transfer.validator.kind === "none"
-        ? "Rangos confirmados; sin validador de identidad"
-        : "Rangos y validador confirmados",
-      className: "supported",
-    };
-    case "unsupported": return { label: "No reanudable", detail: props.item.transfer.resume.reason, className: "unsupported" };
-    case "unknown": return { label: "Por comprobar", detail: "Se determinará al conectar con el servidor", className: "unknown" };
+    case "supported":
+      return {
+        label: "Reanudable",
+        detail:
+          props.item.transfer.validator.kind === "none"
+            ? "Rangos confirmados; sin validador de identidad"
+            : "Rangos y validador confirmados",
+        className: "supported",
+      };
+    case "unsupported":
+      return {
+        label: "No reanudable",
+        detail: props.item.transfer.resume.reason,
+        className: "unsupported",
+      };
+    case "unknown":
+      return {
+        label: "Por comprobar",
+        detail: "Se determinará al conectar con el servidor",
+        className: "unknown",
+      };
   }
 });
-watch(() => [props.item.id, props.item.speedLimitBytes] as const, ([id, value], [previousId]) => {
-  speedLimitDraft.value = value;
-  if (id !== previousId) return;
-  speedLimitApplied.value = true;
-  window.setTimeout(() => { speedLimitApplied.value = false; }, 1800);
-});
+watch(
+  () => [props.item.id, props.item.speedLimitBytes] as const,
+  ([id, value], [previousId]) => {
+    speedLimitDraft.value = value;
+    if (id !== previousId) return;
+    speedLimitApplied.value = true;
+    window.setTimeout(() => {
+      speedLimitApplied.value = false;
+    }, 1800);
+  },
+);
 
 const failedAction = computed(() => recoveryAction(props.item));
 const pausedAction = computed(() => recoveryAction(props.item));
@@ -95,39 +137,302 @@ function applySpeedLimit(): void {
 </script>
 
 <template>
-  <aside class="detail-panel">
-    <header><div><p>INSPECTOR</p><h2>Detalle de descarga</h2></div><button type="button" aria-label="Cerrar" @click="emit('close')"><AppIcon name="close" /></button></header>
-    <div class="detail-scroll">
-      <div class="file-hero"><span><AppIcon name="file" :size="26" /></span><h3>{{ item.fileName }}</h3><p>{{ hostOf(item.source.url) }}</p></div>
-      <div class="state-banner" :class="item.state.kind"><span>{{ stateLabel }}</span><p v-if="item.state.kind === 'failed'">{{ item.state.message }}</p><p v-else>{{ item.telemetry.phase === 'idle' ? resumeMeta.detail : '' }}</p></div>
-      <div class="hero-progress" :class="{ indeterminate: progressIndeterminate }"><div><strong>{{ progressLabel }}</strong><span>{{ formatBytes(item.transfer.downloadedBytes) }}<template v-if="progressKnown"> / {{ formatBytes(total) }}</template></span></div><div class="track" :role="progressKnown ? 'progressbar' : undefined" :aria-label="progressKnown ? `Progreso de ${item.fileName}` : undefined" :aria-valuemin="progressKnown ? 0 : undefined" :aria-valuemax="progressKnown ? 100 : undefined" :aria-valuenow="progressKnown ? progressOf(item) : undefined"><i :style="{width:`${visualProgress}%`}"></i></div></div>
-      <div class="detail-actions">
-        <button v-if="item.state.kind === 'completed' && canReveal" class="primary" type="button" @click="emit('reveal')"><AppIcon name="folder" :size="16" />Mostrar en carpeta</button>
-        <button v-if="item.state.kind === 'downloading'" class="primary" type="button" :disabled="controlsLocked" @click="emit('action','pause')"><AppIcon :name="controlsLocked ? 'activity' : 'pause'" :size="16" />{{ controlsLocked ? 'Finalizando…' : 'Pausar' }}</button>
-        <button v-else-if="item.state.kind !== 'completed' && item.state.kind !== 'queued'" class="primary" type="button" @click="emit('action',item.state.kind === 'failed' ? failedAction : pausedAction)"><AppIcon :name="item.state.kind === 'failed' || pausedAction === 'restart' ? 'refresh' : 'play'" :size="16" />{{ item.state.kind === 'failed' ? (failedAction === 'restart' ? 'Reiniciar' : 'Reintentar') : (pausedAction === 'restart' ? 'Reiniciar' : 'Reanudar') }}</button>
-        <button v-if="item.state.kind === 'queued'" class="primary" type="button" @click="emit('action','pause')">Pausar cola</button>
-        <button v-if="item.state.kind !== 'completed'" type="button" :disabled="controlsLocked" @click="replacing = !replacing"><AppIcon name="link" :size="16" />Actualizar enlace</button>
+  <aside
+    class="detail-panel sticky top-0 h-screen w-83.5 shrink-0 grow-0 basis-83.5 overflow-hidden border-l border-l-line bg-canvas max-inspector:fixed max-inspector:top-0 max-inspector:right-0 max-inspector:z-40 max-inspector:shadow-[-20px_0_50px_rgba(0,0,0,.4)] max-narrow:w-full"
+  >
+    <header class="flex h-20 items-center justify-between border-b border-b-line px-5 py-0">
+      <div>
+        <p class="[margin:0_0_4px] font-mono tracking-[.14em] text-muted">INSPECTOR</p>
+        <h2 class="m-0 text-sm">Detalle de descarga</h2>
+      </div>
+      <button class="ui-icon-button" type="button" aria-label="Cerrar" @click="emit('close')">
+        <AppIcon name="close" />
+      </button>
+    </header>
+    <div class="detail-scroll h-[calc(100vh_-_80px)] overflow-auto [padding:22px_20px_40px]">
+      <div class="file-hero text-center">
+        <span class="m-auto grid h-[57px] w-13 place-items-center rounded-xl bg-elevated text-muted"
+          ><AppIcon name="file" :size="26"
+        /></span>
+        <h3 class="[margin:14px_auto_5px] max-w-65 text-xs wrap-anywhere">
+          {{ item.fileName }}
+        </h3>
+        <p class="m-0 font-mono text-muted">{{ hostOf(item.source.url) }}</p>
+      </div>
+      <div
+        class="state-banner mt-4.5 rounded-lg border border-line bg-raised px-2.5 py-[9px] [&.completed]:border-line [&.downloading]:border-line [&.failed]:border-danger/40 [&.section-note]:leading-[1.55] [&.section-note]:text-muted [&.segments]:grid [&.segments]:grid-cols-[repeat(8,1fr)] [&.segments]:gap-[3px]"
+        :class="item.state.kind"
+      >
+        <span
+          class="font-mono tracking-[.08em] text-foreground uppercase [.state-banner.completed_&]:text-success [.state-banner.downloading_&]:text-accent [.state-banner.failed_&]:text-danger"
+          >{{ stateLabel }}</span
+        >
+        <p
+          class="[margin:4px_0_0] leading-[1.5] text-muted [.state-banner.failed_&]:text-danger"
+          v-if="item.state.kind === 'failed'"
+        >
+          {{ item.state.message }}
+        </p>
+        <p
+          class="[margin:4px_0_0] leading-[1.5] text-muted [.state-banner.failed_&]:text-danger"
+          v-else
+        >
+          {{ item.telemetry.phase === "idle" ? resumeMeta.detail : "" }}
+        </p>
+      </div>
+      <div
+        class="hero-progress mt-5.5 [&.section-note]:leading-[1.55] [&.section-note]:text-muted [&.segments]:grid [&.segments]:grid-cols-[repeat(8,1fr)] [&.segments]:gap-[3px]"
+        :class="{ indeterminate: progressIndeterminate }"
+      >
+        <div class="first:flex first:items-end first:justify-between">
+          <strong
+            class="font-mono text-[22px] [.hero-progress.indeterminate_&]:text-[15px] [.hero-progress.indeterminate_&]:text-foreground"
+            >{{ progressLabel }}</strong><span class="font-mono text-muted"
+            >{{ formatBytes(item.transfer.downloadedBytes)
+            }}<template v-if="progressKnown"> / {{ formatBytes(total) }}</template></span
+          >
+        </div>
+        <div
+          class="track mt-[9px] h-1 overflow-hidden rounded-md bg-line first:flex first:items-end first:justify-between"
+          :role="progressKnown ? 'progressbar' : undefined"
+          :aria-label="progressKnown ? `Progreso de ${item.fileName}` : undefined"
+          :aria-valuemin="progressKnown ? 0 : undefined"
+          :aria-valuemax="progressKnown ? 100 : undefined"
+          :aria-valuenow="progressKnown ? progressOf(item) : undefined"
+        >
+          <i
+            class="block h-full bg-accent [.hero-progress.indeterminate_.track_&]:w-[38%]! [.hero-progress.indeterminate_.track_&]:animate-[fluxor-indeterminate_1.2s_ease-in-out_infinite] [.hero-progress.indeterminate_.track_&]:bg-[linear-gradient(90deg,transparent,var(--color-accent),transparent)] [.segments_&]:h-4.5 [.segments_&]:rounded-md [.segments_&]:bg-line"
+            :style="{ width: `${visualProgress}%` }"
+          ></i>
+        </div>
+      </div>
+      <div class="detail-actions mt-[17px] grid grid-cols-[1fr] gap-[7px]">
+        <button
+          v-if="item.state.kind === 'completed' && canReveal"
+          class="primary flex h-9 min-h-10 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-[transparent] bg-accent text-xs font-bold text-surface disabled:border-line disabled:bg-surface disabled:text-muted disabled:opacity-72"
+          type="button"
+          @click="emit('reveal')"
+        >
+          <AppIcon name="folder" :size="16" />Mostrar en carpeta
+        </button>
+        <button
+          v-if="item.state.kind === 'downloading'"
+          class="primary flex h-9 min-h-10 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-[transparent] bg-accent text-xs font-bold text-surface disabled:border-line disabled:bg-surface disabled:text-muted disabled:opacity-72"
+          type="button"
+          :disabled="controlsLocked"
+          @click="emit('action', 'pause')"
+        >
+          <AppIcon :name="controlsLocked ? 'activity' : 'pause'" :size="16" />{{
+            controlsLocked ? "Finalizando…" : "Pausar"
+          }}
+        </button>
+        <button
+          v-else-if="item.state.kind !== 'completed' && item.state.kind !== 'queued'"
+          class="primary flex h-9 min-h-10 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-[transparent] bg-accent text-xs font-bold text-surface disabled:border-line disabled:bg-surface disabled:text-muted disabled:opacity-72"
+          type="button"
+          @click="emit('action', item.state.kind === 'failed' ? failedAction : pausedAction)"
+        >
+          <AppIcon
+            :name="item.state.kind === 'failed' || pausedAction === 'restart' ? 'refresh' : 'play'"
+            :size="16"
+          />{{
+            item.state.kind === "failed"
+              ? failedAction === "restart"
+                ? "Reiniciar"
+                : "Reintentar"
+              : pausedAction === "restart"
+                ? "Reiniciar"
+                : "Reanudar"
+          }}
+        </button>
+        <button
+          v-if="item.state.kind === 'queued'"
+          class="primary flex h-9 min-h-10 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-[transparent] bg-accent text-xs font-bold text-surface disabled:border-line disabled:bg-surface disabled:text-muted disabled:opacity-72"
+          type="button"
+          @click="emit('action', 'pause')"
+        >
+          Pausar cola
+        </button>
+        <button
+          class="flex h-9 min-h-10 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-line bg-raised text-xs text-muted disabled:border-line disabled:bg-surface disabled:text-muted disabled:opacity-72"
+          v-if="item.state.kind !== 'completed'"
+          type="button"
+          :disabled="controlsLocked"
+          @click="replacing = !replacing"
+        >
+          <AppIcon name="link" :size="16" />Actualizar enlace
+        </button>
       </div>
 
-      <form v-if="replacing" class="replace-form" @submit.prevent="submitReplacement"><label>NUEVO ENLACE O CURL<textarea v-model="replacement" name="replacement-request" autofocus placeholder="https://... o curl 'https://...'" /></label><p v-if="replacementError">{{ replacementError }}</p><div><button type="button" @click="replacing=false">Cancelar</button><button class="save" type="submit">Validar y reanudar</button></div></form>
+      <form
+        v-if="replacing"
+        class="replace-form mt-3 rounded-lg border border-line bg-raised p-3"
+        @submit.prevent="submitReplacement"
+      >
+        <label class="font-mono tracking-[.08em] text-muted"
+          >NUEVO ENLACE O CURL<textarea
+            class="ui-input min-h-24 w-full resize-y py-3 font-mono text-sm"
+            v-model="replacement"
+            name="replacement-request"
+            autofocus
+            placeholder="https://... o curl 'https://...'"
+          />
+        </label>
+        <p class="mx-0 my-1.5 text-danger" v-if="replacementError">
+          {{ replacementError }}
+        </p>
+        <div class="mt-2 flex justify-end gap-1.5">
+          <button
+            class="h-[27px] cursor-pointer border-0 bg-transparent text-muted"
+            type="button"
+            @click="replacing = false"
+          >
+            Cancelar</button
+          ><button
+            class="save h-[27px] cursor-pointer rounded-md border-0 bg-accent px-[9px] py-0 text-surface"
+            type="submit"
+          >
+            Validar y reanudar
+          </button>
+        </div>
+      </form>
 
-      <section v-if="item.state.kind !== 'completed'" class="speed-limit-card"><h4>LÍMITE DE VELOCIDAD</h4><SpeedLimitInput :key="item.id" v-model="speedLimitDraft" name="detail-speed-limit" label="Límite de velocidad de esta descarga" /><div class="speed-limit-actions"><button type="button" :disabled="controlsLocked" @click="applySpeedLimit"><AppIcon name="bolt" :size="13" />{{ speedLimitApplied ? 'Aplicado' : 'Aplicar límite' }}</button><small>Se aplica al instante sobre los segmentos activos.</small></div></section>
+      <section
+        v-if="item.state.kind !== 'completed'"
+        class="speed-limit-card mt-3 rounded-lg border border-line bg-raised p-3"
+      >
+        <h4 class="[margin:0_0_9px] font-mono tracking-[.1em] text-muted">LÍMITE DE VELOCIDAD</h4>
+        <SpeedLimitInput
+          :key="item.id"
+          v-model="speedLimitDraft"
+          name="detail-speed-limit"
+          label="Límite de velocidad de esta descarga"
+        />
+        <div class="speed-limit-actions mt-3 flex flex-col items-stretch gap-2">
+          <button
+            class="ui-button w-full text-sm"
+            type="button"
+            :disabled="controlsLocked"
+            @click="applySpeedLimit"
+          >
+            <AppIcon name="bolt" :size="13" />{{
+              speedLimitApplied ? "Aplicado" : "Aplicar límite"
+            }}</button
+          ><small class="text-xs leading-relaxed text-muted"
+            >Se aplica al instante sobre los segmentos activos.</small
+          >
+        </div>
+      </section>
 
-      <section class="details-section"><h4>TRANSFERENCIA</h4><dl><div><dt>Velocidad</dt><dd>{{ formatSpeed(speed) }}</dd></div><div><dt>Tiempo restante</dt><dd>{{ formatEta(total, item.transfer.downloadedBytes, speed) }}</dd></div><div><dt>Tope</dt><dd>{{ item.speedLimitBytes > 0 ? formatSpeed(item.speedLimitBytes) : 'Sin límite' }}</dd></div><div><dt>Configurados</dt><dd>Hasta {{ item.threads }}</dd></div><div><dt>Reanudación</dt><dd :title="resumeMeta.detail">{{ resumeMeta.label }}</dd></div><div><dt>Identidad</dt><dd>{{ validatorLabel }}</dd></div><div><dt>Destino</dt><dd>{{ item.destination }}</dd></div></dl></section>
+      <section class="details-section mt-[27px]">
+        <h4 class="[margin:0_0_12px] font-mono tracking-[.14em] text-muted">TRANSFERENCIA</h4>
+        <dl class="m-0">
+          <div
+            class="flex min-h-[31px] items-center justify-between gap-[15px] border-b border-b-surface"
+          >
+            <dt class="text-xs text-muted">Velocidad</dt>
+            <dd class="m-0 max-w-47.5 text-right font-mono text-xs text-muted">
+              {{ formatSpeed(speed) }}
+            </dd>
+          </div>
+          <div
+            class="flex min-h-[31px] items-center justify-between gap-[15px] border-b border-b-surface"
+          >
+            <dt class="text-xs text-muted">Tiempo restante</dt>
+            <dd class="m-0 max-w-47.5 text-right font-mono text-xs text-muted">
+              {{ formatEta(total, item.transfer.downloadedBytes, speed) }}
+            </dd>
+          </div>
+          <div
+            class="flex min-h-[31px] items-center justify-between gap-[15px] border-b border-b-surface"
+          >
+            <dt class="text-xs text-muted">Tope</dt>
+            <dd class="m-0 max-w-47.5 text-right font-mono text-xs text-muted">
+              {{ item.speedLimitBytes > 0 ? formatSpeed(item.speedLimitBytes) : "Sin límite" }}
+            </dd>
+          </div>
+          <div
+            class="flex min-h-[31px] items-center justify-between gap-[15px] border-b border-b-surface"
+          >
+            <dt class="text-xs text-muted">Configurados</dt>
+            <dd class="m-0 max-w-47.5 text-right font-mono text-xs text-muted">
+              Hasta {{ item.threads }}
+            </dd>
+          </div>
+          <div
+            class="flex min-h-[31px] items-center justify-between gap-[15px] border-b border-b-surface"
+          >
+            <dt class="text-xs text-muted">Reanudación</dt>
+            <dd
+              class="m-0 max-w-47.5 text-right font-mono text-xs text-muted"
+              :title="resumeMeta.detail"
+            >
+              {{ resumeMeta.label }}
+            </dd>
+          </div>
+          <div
+            class="flex min-h-[31px] items-center justify-between gap-[15px] border-b border-b-surface"
+          >
+            <dt class="text-xs text-muted">Identidad</dt>
+            <dd class="m-0 max-w-47.5 text-right font-mono text-xs text-muted">
+              {{ validatorLabel }}
+            </dd>
+          </div>
+          <div
+            class="flex min-h-[31px] items-center justify-between gap-[15px] border-b border-b-surface"
+          >
+            <dt class="text-xs text-muted">Destino</dt>
+            <dd class="m-0 max-w-47.5 text-right font-mono text-xs text-muted">
+              {{ item.destination }}
+            </dd>
+          </div>
+        </dl>
+      </section>
       <SegmentMonitor :item="item" />
-      <section class="details-section"><h4>SOLICITUD</h4><dl><div><dt>Headers</dt><dd>{{ item.source.headers.length }}</dd></div><div><dt>Cookies</dt><dd>{{ item.source.cookies.length }}</dd></div><div><dt>Ruta</dt><dd class="url" :title="redactUrl(item.source.url)">{{ redactUrl(item.source.url) }}</dd></div></dl></section>
-      <div class="integrity" :class="resumeMeta.className"><AppIcon name="shield" :size="18" /><div><strong>{{ resumeMeta.label }}</strong><p>{{ resumeMeta.detail }}</p></div></div>
+      <section class="details-section mt-[27px]">
+        <h4 class="[margin:0_0_12px] font-mono tracking-[.14em] text-muted">SOLICITUD</h4>
+        <dl class="m-0">
+          <div
+            class="flex min-h-[31px] items-center justify-between gap-[15px] border-b border-b-surface"
+          >
+            <dt class="text-xs text-muted">Headers</dt>
+            <dd class="m-0 max-w-47.5 text-right font-mono text-xs text-muted">
+              {{ item.source.headers.length }}
+            </dd>
+          </div>
+          <div
+            class="flex min-h-[31px] items-center justify-between gap-[15px] border-b border-b-surface"
+          >
+            <dt class="text-xs text-muted">Cookies</dt>
+            <dd class="m-0 max-w-47.5 text-right font-mono text-xs text-muted">
+              {{ item.source.cookies.length }}
+            </dd>
+          </div>
+          <div
+            class="flex min-h-[31px] items-center justify-between gap-[15px] border-b border-b-surface"
+          >
+            <dt class="text-xs text-muted">Ruta</dt>
+            <dd
+              class="url m-0 max-w-47.5 overflow-hidden text-right font-mono text-xs text-ellipsis whitespace-nowrap text-muted"
+              :title="redactUrl(item.source.url)"
+            >
+              {{ redactUrl(item.source.url) }}
+            </dd>
+          </div>
+        </dl>
+      </section>
+      <div
+        class="integrity mt-6.5 flex gap-2.5 rounded-lg border border-line bg-[rgba(194,255,91,.025)] p-3 text-accent [&.section-note]:leading-[1.55] [&.section-note]:text-muted [&.segments]:grid [&.segments]:grid-cols-[repeat(8,1fr)] [&.segments]:gap-[3px]"
+        :class="resumeMeta.className"
+      >
+        <AppIcon name="shield" :size="18" />
+        <div>
+          <strong class="block text-foreground">{{ resumeMeta.label }}</strong>
+          <p class="[margin:3px_0_0] leading-[1.5] text-muted">
+            {{ resumeMeta.detail }}
+          </p>
+        </div>
+      </div>
     </div>
   </aside>
 </template>
-
-<style scoped>
-.detail-panel{width:334px;flex:0 0 334px;height:100vh;border-left:1px solid var(--line);background:#0a0f0d;position:sticky;top:0;overflow:hidden}.detail-panel>header{height:80px;padding:0 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}.detail-panel header p{margin:0 0 4px;color:#626d67;font:8px var(--mono);letter-spacing:.14em}.detail-panel h2{margin:0;font-size:14px}.detail-panel header button{width:32px;height:32px;border:0;background:transparent;color:#6b7570;cursor:pointer}.detail-scroll{height:calc(100vh - 80px);overflow:auto;padding:22px 20px 40px}.file-hero{text-align:center}.file-hero>span{width:52px;height:57px;border-radius:9px;background:#171e1b;color:#8f9a94;display:grid;place-items:center;margin:auto}.file-hero h3{margin:14px auto 5px;max-width:260px;font-size:12px;overflow-wrap:anywhere}.file-hero p{margin:0;color:#66706b;font:9px var(--mono)}.hero-progress{margin-top:22px}.hero-progress>div:first-child{display:flex;align-items:flex-end;justify-content:space-between}.hero-progress strong{font:22px var(--mono)}.hero-progress span{color:#6c7671;font:8px var(--mono)}.track{height:4px;margin-top:9px;background:#212925;border-radius:4px;overflow:hidden}.track i{display:block;height:100%;background:var(--accent)}.detail-actions{margin-top:17px;display:grid;grid-template-columns:1fr 1.35fr;gap:7px}.detail-actions button{height:36px;border:1px solid #29322e;border-radius:6px;background:#121815;color:#8f9994;font-size:9px;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}.detail-actions button.primary{border-color:transparent;background:var(--accent);color:#11180e;font-weight:700}.replace-form{margin-top:12px;padding:12px;border:1px solid #334038;border-radius:7px;background:#101613}.replace-form label{color:#68736d;font:8px var(--mono);letter-spacing:.08em}.replace-form textarea{display:block;width:100%;height:68px;margin-top:7px;padding:8px;resize:none;border:1px solid #29332e;border-radius:5px;background:#090e0c;color:#d6ddd9;font:9px/1.5 var(--mono);outline:none}.replace-form p{margin:6px 0;color:var(--danger);font-size:9px}.replace-form>div{margin-top:8px;display:flex;justify-content:flex-end;gap:6px}.replace-form button{height:27px;border:0;background:transparent;color:#7f8984;font-size:9px;cursor:pointer}.replace-form button.save{padding:0 9px;border-radius:4px;background:var(--accent);color:#11170f}.speed-limit-card{margin-top:12px;padding:12px;border:1px solid #334038;border-radius:7px;background:#101613}.speed-limit-card h4{margin:0 0 9px;color:#68736d;font:8px var(--mono);letter-spacing:.1em}.speed-limit-actions{margin-top:8px;display:flex;align-items:center;justify-content:space-between;gap:8px}.speed-limit-actions button{height:29px;padding:0 10px;border:1px solid #3b5034;border-radius:5px;background:#17231a;color:#bce27e;display:flex;align-items:center;gap:5px;font:8px var(--mono);cursor:pointer}.speed-limit-actions button:hover{border-color:var(--accent);color:var(--accent)}.speed-limit-actions button:disabled{border-color:#314038;background:#18201c;color:#77837d;opacity:.72;cursor:default}.speed-limit-actions small{color:#5e6863;font:8px var(--mono);text-align:right;line-height:1.4}.details-section{margin-top:27px}.details-section h4{margin:0 0 12px;color:#69736e;font:8px var(--mono);letter-spacing:.14em}.details-section dl{margin:0}.details-section dl>div{min-height:31px;border-bottom:1px solid #1a211e;display:flex;align-items:center;justify-content:space-between;gap:15px}.details-section dt{color:#68726d;font-size:9px}.details-section dd{margin:0;max-width:190px;color:#aab3ae;font:9px var(--mono);text-align:right}.details-section dd.url{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.segments{display:grid;grid-template-columns:repeat(8,1fr);gap:3px}.segments i{height:18px;border-radius:2px;background:#232c27}.segments i.complete{background:var(--accent)}.section-note{color:#5e6863;font-size:9px;line-height:1.55}.integrity{margin-top:26px;padding:12px;border:1px solid #27322c;border-radius:7px;background:rgba(194,255,91,.025);display:flex;gap:10px;color:var(--accent)}.integrity strong{display:block;font-size:9px;color:#aeb8b2}.integrity p{margin:3px 0 0;color:#65706a;font-size:8px;line-height:1.4}
-.state-banner{margin-top:18px;padding:9px 10px;border:1px solid #2d3732;border-radius:6px;background:#111714}.state-banner span{color:#b4beb9;font:8px var(--mono);letter-spacing:.08em;text-transform:uppercase}.state-banner p{margin:4px 0 0;color:#68736d;font-size:8px;line-height:1.4}.state-banner.downloading{border-color:#3d5032}.state-banner.downloading span{color:var(--accent)}.state-banner.failed{border-color:#56332f}.state-banner.failed span,.state-banner.failed p{color:#c67b75}.state-banner.completed{border-color:#2e493d}.state-banner.completed span{color:#65cda5}.hero-progress.indeterminate .track i{width:38%!important;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:indeterminate 1.2s ease-in-out infinite}.hero-progress.indeterminate strong{font-size:15px;color:#b9c4be}@keyframes indeterminate{from{transform:translateX(-110%)}to{transform:translateX(280%)}}
-.detail-panel header p,.file-hero p,.hero-progress span,.details-section h4,.details-section dt{color:#84908a}
-.detail-actions button:disabled{border-color:#314038;background:#18201c;color:#77837d;opacity:.72}
-@media(max-width:1180px){.detail-panel{position:fixed;z-index:40;right:0;top:0;box-shadow:-20px 0 50px rgba(0,0,0,.4)}}@media(max-width:520px){.detail-panel{width:100%;}}
-.details-section dt,.details-section dd,.detail-actions button{font-size:12px}
-.state-banner p,.integrity p{font-size:11px;line-height:1.5}
-.detail-actions{grid-template-columns:1fr}.detail-actions button{min-height:40px}
-</style>

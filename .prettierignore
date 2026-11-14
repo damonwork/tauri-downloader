@@ -1,0 +1,7 @@
+node_modules
+src-tauri/target
+src-tauri/gen
+dist
+dist-extension
+package-lock.json
+browser-extension/generated
