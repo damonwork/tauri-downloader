@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { DownloadAction, DownloadItem } from "@/domain/download";
-import { progressOf } from "@/domain/download";
+import { progressOf, recoveryAction } from "@/domain/download";
 import { formatBytes, formatEta, formatSpeed, hostOf, relativeTime } from "@/domain/format";
 import AppIcon from "./AppIcon.vue";
 
@@ -72,15 +72,9 @@ const primaryAction = computed<{ action: DownloadAction; icon: string; label: st
   if (props.item.state.kind === "downloading" || props.item.state.kind === "queued") {
     return { action: "pause", icon: "pause", label: "Pausar" };
   }
-  if (props.item.state.kind === "failed") {
-    return props.item.state.recoverable
-      ? { action: "retry", icon: "refresh", label: "Reintentar" }
-      : { action: "restart", icon: "refresh", label: "Reiniciar desde cero" };
-  }
-  if (props.item.transfer.downloadedBytes > 0 && props.item.transfer.resume.kind === "unsupported") {
-    return { action: "restart", icon: "refresh", label: "Reiniciar desde cero" };
-  }
-  return { action: "resume", icon: "play", label: "Reanudar" };
+  const action = recoveryAction(props.item);
+  return { action, icon: action === "resume" ? "play" : "refresh",
+    label: action === "restart" ? "Reiniciar desde cero" : action === "retry" ? "Reintentar" : "Reanudar" };
 });
 </script>
 
@@ -101,7 +95,7 @@ const primaryAction = computed<{ action: DownloadAction; icon: string; label: st
     </div>
 
     <div class="progress-cell">
-      <div class="progress-head"><span>{{ formatBytes(item.transfer.downloadedBytes) }} <i v-if="progressKnown">/ {{ formatBytes(total) }}</i></span><strong>{{ progressLabel }}</strong></div>
+      <p v-if="item.state.kind === 'downloading'" class="compact-transfer">{{ formatSpeed(speed) }} · Restante: {{ formatEta(total, item.transfer.downloadedBytes, speed) }}</p><div class="progress-head"><span>{{ formatBytes(item.transfer.downloadedBytes) }} <i v-if="progressKnown">/ {{ formatBytes(total) }}</i></span><strong>{{ progressLabel }}</strong></div>
       <div class="track" :class="[stateMeta.className,{indeterminate:progressIndeterminate}]" :role="progressKnown ? 'progressbar' : undefined" :aria-label="progressKnown ? `Progreso de ${item.fileName}` : undefined" :aria-valuemin="progressKnown ? 0 : undefined" :aria-valuemax="progressKnown ? 100 : undefined" :aria-valuenow="progressKnown ? progress : undefined"><span :style="{ width: `${visualProgress}%` }"></span></div>
     </div>
 
@@ -130,4 +124,11 @@ const primaryAction = computed<{ action: DownloadAction; icon: string; label: st
 @media (max-width:760px) { .download-row { min-height:108px;grid-template-columns:1fr auto;grid-template-rows:auto auto;padding:14px 12px;gap:12px }.file-cell{grid-column:1}.progress-cell{grid-column:1/-1;grid-row:2}.transfer-cell{display:none}.row-actions{grid-column:2;grid-row:1}.delete-action{display:grid}.details-action{display:none} }
 @container workspace (max-width:1100px){.download-row{grid-template-columns:minmax(180px,1.3fr) minmax(130px,1fr) 90px 68px;gap:12px}.status-cell{display:none}.compact-state{display:inline}.reveal-action{display:none!important}.details-action{display:none}}
 @container workspace (max-width:650px){.download-row{min-height:108px;grid-template-columns:1fr auto;grid-template-rows:auto auto;padding:14px 12px;gap:12px}.file-cell{grid-column:1}.progress-cell{grid-column:1/-1;grid-row:2}.transfer-cell{display:none}.row-actions{grid-column:2;grid-row:1}.row-actions button:nth-child(2){display:grid}.row-actions button:last-child{display:none}}
+.compact-transfer{display:none;margin:0 0 8px;color:#b6c4bb;font:11px var(--mono)}
+.download-row:focus-visible{box-shadow:inset 0 0 0 2px var(--accent)}
+@container workspace (max-width:650px){.compact-transfer{display:block}}
+@media(max-width:760px){.compact-transfer{display:block}}
+.progress-head span,.progress-head strong,.transfer-cell strong{font-size:12px}
+.transfer-cell small,.file-copy p,.resume-chip{font-size:11px}
+.transfer-cell small{line-height:1.5}.file-copy strong{font-size:13px}
 </style>

@@ -200,6 +200,7 @@ pub(super) async fn run_segmented(
     .await?;
 
     let limiter = BandwidthLimiter::shared(input.speed_limit);
+    let workers_cancellation = cancellation.child_token();
     let size = TransferSize::Known { total_bytes };
     let resume = ResumeSupport::Supported;
     let mode = TransferMode::Segmented;
@@ -229,7 +230,7 @@ pub(super) async fn run_segmented(
                 start: start + resumed,
                 end,
                 append: resumed > 0,
-                cancellation: cancellation.child_token(),
+                cancellation: workers_cancellation.child_token(),
                 limiter: limiter.clone(),
                 runtime,
             });
@@ -276,7 +277,7 @@ pub(super) async fn run_segmented(
         tokio::select! {
             biased;
             _ = cancellation.cancelled() => {
-                abort_segments(&mut tasks).await;
+                stop_segments(&mut tasks, &workers_cancellation).await;
                 stop_active_segments(&runtimes);
                 let segments = snapshot_segments(&runtimes, &vec![0; runtimes.len()]);
                 publish_progress(&progress, segments_downloaded(&segments), &size, &probe.validator, &resume, 0, TransferPhase::Idle, mode.clone(), segments);
@@ -286,7 +287,7 @@ pub(super) async fn run_segmented(
                 if startup_ready.load(Ordering::Acquire) {
                     continue;
                 }
-                publish_stopped_segments(&mut tasks, &runtimes, &progress, &size, &probe.validator, &resume, &mode).await;
+                publish_stopped_segments(&mut tasks, &workers_cancellation, &runtimes, &progress, &size, &probe.validator, &resume, &mode).await;
                 return Err(if has_segment_partials {
                     EngineError::SegmentInterrupted
                 } else {
@@ -308,11 +309,11 @@ pub(super) async fn run_segmented(
             result = tasks.join_next() => match result {
                 Some(Ok(Ok(()))) => {}
                 Some(Ok(Err(error))) => {
-                    publish_stopped_segments(&mut tasks, &runtimes, &progress, &size, &probe.validator, &resume, &mode).await;
+                    publish_stopped_segments(&mut tasks, &workers_cancellation, &runtimes, &progress, &size, &probe.validator, &resume, &mode).await;
                     return Err(error);
                 }
                 Some(Err(_)) => {
-                    publish_stopped_segments(&mut tasks, &runtimes, &progress, &size, &probe.validator, &resume, &mode).await;
+                    publish_stopped_segments(&mut tasks, &workers_cancellation, &runtimes, &progress, &size, &probe.validator, &resume, &mode).await;
                     return Err(EngineError::SegmentTask);
                 }
                 None => break,
@@ -373,8 +374,10 @@ pub(super) async fn run_segmented(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn publish_stopped_segments(
     tasks: &mut JoinSet<Result<(), EngineError>>,
+    cancellation: &CancellationToken,
     runtimes: &[Arc<SegmentRuntime>],
     progress: &watch::Sender<Option<EngineProgress>>,
     size: &TransferSize,
@@ -382,7 +385,7 @@ async fn publish_stopped_segments(
     resume: &ResumeSupport,
     mode: &TransferMode,
 ) {
-    abort_segments(tasks).await;
+    stop_segments(tasks, cancellation).await;
     stop_active_segments(runtimes);
     let segments = snapshot_segments(runtimes, &vec![0; runtimes.len()]);
     publish_progress(
@@ -434,8 +437,12 @@ pub(super) fn split_ranges(total: u64, requested_threads: u8) -> Vec<(u64, u64)>
         .collect()
 }
 
-async fn abort_segments(tasks: &mut JoinSet<Result<(), EngineError>>) {
-    tasks.abort_all();
+async fn stop_segments(
+    tasks: &mut JoinSet<Result<(), EngineError>>,
+    cancellation: &CancellationToken,
+) {
+    // Let workers drain queued filesystem writes before reconciling partials.
+    cancellation.cancel();
     while tasks.join_next().await.is_some() {}
 }
 

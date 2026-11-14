@@ -99,42 +99,47 @@ impl SegmentWorker {
         startup_ready.store(true, Ordering::Release);
         self.runtime.set_state(SEGMENT_DOWNLOADING);
         let mut output = open_partial(&self.path, self.append).await?;
-        let expected_bytes = self.end - self.start + 1;
-        let mut received_bytes = first_chunk.len() as u64;
-        if received_bytes > expected_bytes {
-            return Err(EngineError::InvalidContentRange);
-        }
-        self.limiter
-            .acquire(first_chunk.len(), &self.cancellation)
-            .await?;
-        output
-            .write_all(&first_chunk)
-            .await
-            .map_err(EngineError::File)?;
-        self.runtime.mark_activity(received_bytes);
-        loop {
-            let next = tokio::select! {
-                _ = self.cancellation.cancelled() => return Err(EngineError::Cancelled),
-                chunk = response.chunk() => {
-                    chunk.map_err(|_| segment_stream_error(self.append, received_bytes))?
-                },
-            };
-            let Some(chunk) = next else { break };
-            self.limiter
-                .acquire(chunk.len(), &self.cancellation)
-                .await?;
-            received_bytes += chunk.len() as u64;
+        let transfer = async {
+            let expected_bytes = self.end - self.start + 1;
+            let mut received_bytes = first_chunk.len() as u64;
             if received_bytes > expected_bytes {
                 return Err(EngineError::InvalidContentRange);
             }
-            output.write_all(&chunk).await.map_err(EngineError::File)?;
-            self.runtime.mark_activity(chunk.len() as u64);
+            self.limiter
+                .acquire(first_chunk.len(), &self.cancellation)
+                .await?;
+            output
+                .write_all(&first_chunk)
+                .await
+                .map_err(EngineError::File)?;
+            self.runtime.mark_activity(received_bytes);
+            loop {
+                let next = tokio::select! {
+                    _ = self.cancellation.cancelled() => return Err(EngineError::Cancelled),
+                    chunk = response.chunk() => {
+                        chunk.map_err(|_| segment_stream_error(self.append, received_bytes))?
+                    },
+                };
+                let Some(chunk) = next else { break };
+                self.limiter
+                    .acquire(chunk.len(), &self.cancellation)
+                    .await?;
+                received_bytes += chunk.len() as u64;
+                if received_bytes > expected_bytes {
+                    return Err(EngineError::InvalidContentRange);
+                }
+                output.write_all(&chunk).await.map_err(EngineError::File)?;
+                self.runtime.mark_activity(chunk.len() as u64);
+            }
+            if received_bytes != expected_bytes {
+                return Err(segment_stream_error(self.append, received_bytes));
+            }
+            Ok::<(), EngineError>(())
         }
-        if received_bytes != expected_bytes {
-            return Err(segment_stream_error(self.append, received_bytes));
-        }
+        .await;
         output.flush().await.map_err(EngineError::File)?;
-        output.sync_data().await.map_err(EngineError::File)
+        output.sync_data().await.map_err(EngineError::File)?;
+        transfer
     }
 }
 

@@ -10,6 +10,7 @@ const BRIDGE_URL = "http://127.0.0.1:17846";
 const requestById = new Map();
 const recentByUrl = new Map();
 const queuedKeys = new Map();
+const pendingSends = new Map();
 const lastMediaLog = new Map();
 
 function missingTokenResult() {
@@ -170,6 +171,21 @@ function mediaResponse(details) {
 }
 
 async function queueCandidate(candidate) {
+  const pending = pendingSends.get(candidate.url);
+  if (pending) {
+    const result = await pending;
+    return result.ok ? { ...result, duplicate: true } : result;
+  }
+  const operation = sendCandidate(candidate);
+  pendingSends.set(candidate.url, operation);
+  try {
+    return await operation;
+  } finally {
+    pendingSends.delete(candidate.url);
+  }
+}
+
+async function sendCandidate(candidate) {
   if (!validUrl(candidate.url)) {
     await logEvent("error", "capture", "El enlace multimedia no es HTTP/HTTPS.");
     return { ok: false, error: "El enlace multimedia no es HTTP/HTTPS." };
@@ -201,17 +217,17 @@ async function queueCandidate(candidate) {
   const key = candidate.url;
   const previous = queuedKeys.get(key);
   if (previous && Date.now() - previous < 15_000) return { ok: true, duplicate: true };
-  queuedKeys.set(key, Date.now());
-  if (queuedKeys.size > 200) queuedKeys.delete(queuedKeys.keys().next().value);
+
   const cookies = candidate.cookies?.length ? candidate.cookies : await cookiesForUrl(candidate.url);
   const effectiveCandidate = { ...candidate, fileName, cookies };
+  const forceSingleStream = current.singleStream === true || candidate.forceSingleStream === true;
   await logEvent("info", "bridge", "Enviando recurso a Fluxor.", {
       url: diagnosticUrl(candidate.url),
       fileName,
       hasReferrer: Boolean(candidate.referrer || candidate.pageUrl),
       hasUserAgent: Boolean(candidate.userAgent),
       cookieCount: cookies.length,
-      forceSingleStream: Boolean(candidate.forceSingleStream),
+      forceSingleStream: forceSingleStream,
     });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -227,7 +243,7 @@ async function queueCandidate(candidate) {
           referrer: candidate.referrer || "",
           userAgent: candidate.userAgent || "",
           cookies,
-          forceSingleStream: Boolean(candidate.forceSingleStream),
+          forceSingleStream: forceSingleStream,
         } }),
         signal: controller.signal,
       });
@@ -243,6 +259,7 @@ async function queueCandidate(candidate) {
         url: diagnosticUrl(candidate.url),
       });
       queuedKeys.set(key, Date.now());
+      if (queuedKeys.size > 200) queuedKeys.delete(queuedKeys.keys().next().value);
       await setBadge("");
       return { ok: true, item: body.data };
     } catch (error) {

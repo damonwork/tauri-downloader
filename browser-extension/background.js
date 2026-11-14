@@ -59,7 +59,7 @@ api.webRequest.onHeadersReceived.addListener(
       userAgent: context.userAgent,
       cookies: context.cookies,
       tabId: details.tabId,
-      forceSingleStream: true,
+      forceSingleStream: false,
       detectedAt: new Date().toISOString(),
     };
     candidate.fileName = resolveFileName(candidate);
@@ -109,7 +109,7 @@ api.downloads.onCreated.addListener(async (download) => {
       cookies: context.cookies,
       mediaType: mediaTypeFromUrl(url),
       tabId: download.tabId,
-      forceSingleStream: signedUrl(url),
+      forceSingleStream: false,
     });
     if (result.ok) {
       await extensionApiCall(api.downloads.cancel.bind(api.downloads), download.id).catch(() => {});
@@ -149,7 +149,7 @@ api.contextMenus.onClicked.addListener(async (info, tab) => {
     userAgent: context.userAgent || "",
     mediaType: mediaTypeFromUrl(url),
     tabId: tab?.id ?? -1,
-    forceSingleStream: signedUrl(url),
+    forceSingleStream: false,
   });
 });
 

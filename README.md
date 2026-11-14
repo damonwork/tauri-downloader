@@ -99,6 +99,25 @@ npm run tauri dev
 npm run tauri build
 ```
 
+## Pruebas del motor sin interfaz gráfica
+
+El escritorio sigue activado por defecto. El mismo motor se puede compilar y probar
+sin GTK/WebKitGTK para desarrollar la lógica de transferencias:
+
+```bash
+cd src-tauri
+cargo test --locked --no-default-features
+cargo clippy --locked --no-default-features --all-targets -- -D warnings
+```
+
+`tests/http_transfers.rs` usa servidores HTTP locales y comprueba los bytes finales,
+parciales y transiciones ante cortes, rangos falsos, errores HTTP y cambios de límites.
+No sustituye las pruebas del gestor, IPC ni la ejecución del escritorio.
+
+Las conexiones se negocian automáticamente, también desde la extensión. En el formulario
+avanzado o el popup de la extensión se puede forzar una solicitud continua para servidores
+restrictivos. No se deduce la capacidad de reanudación únicamente de una firma en la URL.
+
 ## Validación sin Rust local
 
 La vista de producción puede ejecutarse en la red Docker externa `proxy` sin publicar puertos:
@@ -156,7 +175,7 @@ seguro del sistema.
 
 ## Roadmap
 
-1. Pruebas HTTP de integración con servidor controlado: rangos, desconexiones y cambio de ETag.
+1. Ampliar las pruebas HTTP existentes a más CDN, proxies y respuestas adversas.
 2. Reintentos automáticos con backoff sin ocupar slots de concurrencia.
 3. Checksums, límites por host y rotación de proxies.
 4. Almacén seguro de credenciales y migraciones de persistencia.
@@ -200,8 +219,8 @@ Firefox vía `background.scripts` del manifest.
   `fluxor-browser-extensions.zip`.
 - **Contexto real de la petición**: captura cookies, Referer y User-Agent de la
   solicitud original (`onBeforeSendHeaders`) y los reutiliza para la descarga.
-- **Enlaces firmados**: detecta URLs firmadas (Policy, Signature, X-Amz, etc.) y
-  fuerza el flujo único con `Range: bytes=0-`, sin segmentar ni prometer pausa.
+- **Enlaces firmados**: negocia rangos con el origen; permite forzar una solicitud
+  continua desde el popup para servidores restrictivos.
 - **Deduplicación de envíos**: ignora el mismo enlace durante 15 segundos y
   extiende la ventana tras un envío exitoso para evitar descargas duplicadas.
 - **Diagnóstico en el popup**: registro de eventos persistente con nivel

@@ -73,17 +73,25 @@ fn smoothing_alpha(elapsed: Duration) -> f64 {
     1.0 - (-elapsed.as_secs_f64() / SPEED_SMOOTHING_WINDOW.as_secs_f64()).exp()
 }
 
+struct RateBudget {
+    updated_at: Instant,
+    available: f64,
+}
+
 #[derive(Clone)]
 pub(super) struct BandwidthLimiter {
     bytes_per_second: Arc<AtomicU64>,
-    next_available: Arc<Mutex<Instant>>,
+    budget: Arc<Mutex<RateBudget>>,
 }
 
 impl BandwidthLimiter {
     pub(super) fn shared(bytes_per_second: Arc<AtomicU64>) -> Self {
         Self {
             bytes_per_second,
-            next_available: Arc::new(Mutex::new(Instant::now())),
+            budget: Arc::new(Mutex::new(RateBudget {
+                updated_at: Instant::now(),
+                available: 0.0,
+            })),
         }
     }
 
@@ -92,26 +100,42 @@ impl BandwidthLimiter {
         bytes: usize,
         cancellation: &CancellationToken,
     ) -> Result<(), EngineError> {
-        let bytes_per_second = self.bytes_per_second.load(Ordering::Relaxed);
-        if bytes_per_second == 0 || bytes == 0 {
-            return Ok(());
-        }
-        let wait = {
-            let mut next_available = self.next_available.lock().await;
-            let now = Instant::now();
-            if *next_available < now {
-                *next_available = now;
+        let mut remaining = bytes;
+        while remaining > 0 {
+            if cancellation.is_cancelled() {
+                return Err(EngineError::Cancelled);
             }
-            *next_available += transfer_duration(bytes, bytes_per_second);
-            next_available.saturating_duration_since(now)
-        };
-        if wait.is_zero() {
-            return Ok(());
+            let rate = self.bytes_per_second.load(Ordering::Relaxed);
+            if rate == 0 {
+                let mut budget = self.budget.lock().await;
+                budget.available = 0.0;
+                budget.updated_at = Instant::now();
+                return Ok(());
+            }
+            let wait = {
+                let mut budget = self.budget.lock().await;
+                let now = Instant::now();
+                let capacity = (rate as f64 * 0.1).max(1.0);
+                budget.available = (budget.available
+                    + now.duration_since(budget.updated_at).as_secs_f64() * rate as f64)
+                    .min(capacity);
+                budget.updated_at = now;
+                let granted = (budget.available.floor() as usize).min(remaining);
+                budget.available -= granted as f64;
+                remaining -= granted;
+                Duration::from_secs_f64((remaining as f64 / rate as f64).clamp(0.001, 0.1))
+            };
+            if remaining == 0 {
+                return Ok(());
+            }
+            // Poll the live limit while waiting: raising/removing it must not
+            // leave a chunk asleep for minutes under the previous setting.
+            tokio::select! {
+                _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
+                _ = time::sleep(wait) => {}
+            }
         }
-        tokio::select! {
-            _ = cancellation.cancelled() => Err(EngineError::Cancelled),
-            _ = time::sleep(wait) => Ok(()),
-        }
+        Ok(())
     }
 }
 
@@ -122,6 +146,22 @@ pub(super) fn bytes_per_second(bytes: u64, elapsed: Duration) -> u64 {
     (bytes as f64 / elapsed.as_secs_f64()) as u64
 }
 
-pub(super) fn transfer_duration(bytes: usize, bytes_per_second: u64) -> Duration {
-    Duration::from_secs_f64(bytes as f64 / bytes_per_second as f64)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cloned_limiters_share_one_budget() {
+        let limiter = BandwidthLimiter::shared(Arc::new(AtomicU64::new(128 * 1024)));
+        let second = limiter.clone();
+        let token = CancellationToken::new();
+        let started = Instant::now();
+        let (a, b) = tokio::join!(
+            limiter.acquire(64 * 1024, &token),
+            second.acquire(64 * 1024, &token)
+        );
+        a.unwrap();
+        b.unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(900));
+    }
 }

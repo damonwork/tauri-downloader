@@ -46,6 +46,26 @@ jobs:
       - name: Verify browser extension
         run: npm run verify:extension
 
+  engine-http:
+    name: Engine HTTP scenarios (without desktop)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: headless
+      - run: cargo fmt --all --check
+        working-directory: src-tauri
+      - run: cargo clippy --locked --no-default-features --all-targets -- -D warnings
+        working-directory: src-tauri
+      - run: cargo test --locked --no-default-features -- --nocapture
+        working-directory: src-tauri
+
   rust:
     name: Rust
     runs-on: ubuntu-22.04
@@ -85,7 +105,7 @@ jobs:
 
       - name: Run Rust tests
         working-directory: src-tauri
-        run: cargo test --locked --lib
+        run: cargo test --locked
 
       - name: Check desktop crate
         working-directory: src-tauri

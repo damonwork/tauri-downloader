@@ -80,7 +80,7 @@ function capture(video, button) {
       pageTitle: document.title,
       mediaType: "video",
       referrer: document.referrer,
-      forceSingleStream: true,
+      forceSingleStream: false,
     },
   }).then((result) => {
     showResult(button, result);

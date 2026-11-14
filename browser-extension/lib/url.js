@@ -10,15 +10,6 @@ function validUrl(value) {
   }
 }
 
-function signedUrl(value) {
-  try {
-    const url = new URL(value);
-    return ["expires", "signature", "policy", "x-amz-signature", "xet-cas-uid"].some((name) => url.searchParams.has(name));
-  } catch {
-    return false;
-  }
-}
-
 function diagnosticUrl(value) {
   try {
     const url = new URL(value);
