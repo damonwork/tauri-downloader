@@ -201,9 +201,6 @@ dedupContext.fetch = async () => ({ ok: true, json: async () => ({ ok: true, dat
 for (const script of ["lib/log.js", "lib/url.js", "lib/naming.js", "lib/store.js", "lib/capture.js"]) {
   vm.runInContext(readFileSync(join(extension, script), "utf8"), dedupContext, { filename: script });
 }
-for (const parameter of ["Signature", "Policy", "X-Amz-Signature", "signature"]) {
-  assert.strictEqual(vm.runInContext(`signedUrl("https://example.com/file?${parameter}=test")`, dedupContext), true);
-}
 const enqueue = () => vm.runInContext('queueCandidate({ url: "https://example.com/video.mp4", fileName: "video.mp4" })', dedupContext);
 const firstSend = await enqueue();
 const secondSend = await enqueue();

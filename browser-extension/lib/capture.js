@@ -219,14 +219,15 @@ async function sendCandidate(candidate) {
   if (previous && Date.now() - previous < 15_000) return { ok: true, duplicate: true };
 
   const cookies = candidate.cookies?.length ? candidate.cookies : await cookiesForUrl(candidate.url);
-  const effectiveCandidate = { ...candidate, fileName, cookies, forceSingleStream: current.singleStream === true || candidate.forceSingleStream === true };
+  const effectiveCandidate = { ...candidate, fileName, cookies };
+  const forceSingleStream = current.singleStream === true || candidate.forceSingleStream === true;
   await logEvent("info", "bridge", "Enviando recurso a Fluxor.", {
       url: diagnosticUrl(candidate.url),
       fileName,
       hasReferrer: Boolean(candidate.referrer || candidate.pageUrl),
       hasUserAgent: Boolean(candidate.userAgent),
       cookieCount: cookies.length,
-      forceSingleStream: Boolean(effectiveCandidate.forceSingleStream),
+      forceSingleStream: forceSingleStream,
     });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);
@@ -242,7 +243,7 @@ async function sendCandidate(candidate) {
           referrer: candidate.referrer || "",
           userAgent: candidate.userAgent || "",
           cookies,
-          forceSingleStream: Boolean(effectiveCandidate.forceSingleStream),
+          forceSingleStream: forceSingleStream,
         } }),
         signal: controller.signal,
       });

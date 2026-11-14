@@ -175,7 +175,7 @@ seguro del sistema.
 
 ## Roadmap
 
-1. Pruebas HTTP de integración con servidor controlado: rangos, desconexiones y cambio de ETag.
+1. Ampliar las pruebas HTTP existentes a más CDN, proxies y respuestas adversas.
 2. Reintentos automáticos con backoff sin ocupar slots de concurrencia.
 3. Checksums, límites por host y rotación de proxies.
 4. Almacén seguro de credenciales y migraciones de persistencia.
