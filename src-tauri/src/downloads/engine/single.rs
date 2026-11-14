@@ -6,8 +6,8 @@ use tokio::{io::AsyncWriteExt, sync::watch, time};
 use tokio_util::sync::CancellationToken;
 
 use super::http::{
-    accepts_ranges, apply_if_range, apply_source_headers, content_range_total, ensure_same_size,
-    ensure_same_source, response_size, response_validator, resume_support, validate_content_range,
+    apply_if_range, apply_source_headers, content_range_total, ensure_same_size,
+    ensure_same_source, response_size, response_validator, validate_content_range,
 };
 use super::rate::{BandwidthLimiter, TransferRateEstimator};
 use super::storage::{
@@ -66,9 +66,8 @@ pub(super) async fn run_single(
     let resume_at = file_len(&partial_path).await?;
 
     let mut request = apply_source_headers(client.get(&input.item.source.url), &input.item.source)?;
-    if resume_at > 0 || input.item.source.force_single_stream {
-        request = request.header(RANGE, format!("bytes={resume_at}-"));
-    }
+    // The transfer itself confirms range support, without an extra GET.
+    request = request.header(RANGE, format!("bytes={resume_at}-"));
     if resume_at > 0 {
         request = apply_if_range(request, &input.item.transfer.validator)?;
     }
@@ -95,13 +94,13 @@ pub(super) async fn run_single(
         _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
         response = request.send() => response.map_err(|_| EngineError::Request)?,
     };
-    if resume_at > 0 && response.status() != StatusCode::PARTIAL_CONTENT {
-        return Err(EngineError::ResumeRejected);
-    }
     if !response.status().is_success() {
         return Err(EngineError::HttpStatus(response.status().as_u16()));
     }
-    if resume_at > 0 {
+    if resume_at > 0 && response.status() != StatusCode::PARTIAL_CONTENT {
+        return Err(EngineError::ResumeRejected);
+    }
+    if response.status() == StatusCode::PARTIAL_CONTENT {
         let total_bytes =
             content_range_total(response.headers()).ok_or(EngineError::InvalidContentRange)?;
         let expected_total = match &input.item.transfer.size {
@@ -123,19 +122,17 @@ pub(super) async fn run_single(
     } else {
         validator
     };
-    let resume = if resume_at > 0 || !input.item.source.force_single_stream {
-        resume_support(
-            response.status() == StatusCode::PARTIAL_CONTENT || accepts_ranges(response.headers()),
-        )
+    let resume = if response.status() == StatusCode::PARTIAL_CONTENT {
+        ResumeSupport::Supported
     } else {
         ResumeSupport::Unsupported {
-            reason: "El enlace firmado solo autoriza una solicitud continua".to_owned(),
+            reason: "El servidor ignoró la solicitud por rango".to_owned(),
         }
     };
     let size = response_size(response.headers(), resume_at);
     ensure_same_size(resume_at, &input.item.transfer.size, &size)?;
     let mut output = open_partial(&partial_path, resume_at > 0).await?;
-    let limiter = BandwidthLimiter::shared(input.speed_limit);
+    let limiter = BandwidthLimiter::shared(input.speed_limit.clone());
     let mut downloaded = resume_at;
     let mut rate = TransferRateEstimator::new(downloaded, Instant::now());
     let mut last_activity_at = None;
@@ -160,6 +157,7 @@ pub(super) async fn run_single(
             last_activity_at,
         ),
     );
+    let transfer = async {
     loop {
         let next = tokio::select! {
             _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
@@ -187,11 +185,46 @@ pub(super) async fn run_single(
             chunk = response.chunk() => chunk.map_err(|_| EngineError::Request)?,
         };
         let Some(chunk) = next else { break };
-        limiter.acquire(chunk.len(), &cancellation).await?;
-        output.write_all(&chunk).await.map_err(EngineError::File)?;
-        downloaded += chunk.len() as u64;
-        last_activity_at = Some(Utc::now());
+        if matches!(&size, TransferSize::Known { total_bytes } if downloaded.saturating_add(chunk.len() as u64) > *total_bytes)
+        {
+            return Err(EngineError::InvalidContentRange);
+        }
+        let mut offset = 0;
+        while offset < chunk.len() {
+            let limit = input.speed_limit.load(std::sync::atomic::Ordering::Relaxed);
+            let block_size = if limit == 0 {
+                chunk.len()
+            } else {
+                (limit / 10).clamp(1, 65_536) as usize
+            };
+            let end = (offset + block_size).min(chunk.len());
+            let block = &chunk[offset..end];
+            let acquire = limiter.acquire(block.len(), &cancellation);
+            tokio::pin!(acquire);
+            loop {
+                tokio::select! {
+                    result = &mut acquire => { result?; break; }
+                    _ = interval.tick() => {
+                        let speed = rate.sample(downloaded, Instant::now());
+                        send_progress(&progress, downloaded, &size, &validator, &resume, speed,
+                            single_telemetry(TransferPhase::Transferring, reason.clone(), &size,
+                                downloaded, speed, SegmentState::Downloading, last_activity_at));
+                    }
+                }
+            }
+            output.write_all(block).await.map_err(EngineError::File)?;
+            downloaded += block.len() as u64;
+            last_activity_at = Some(Utc::now());
+            offset = end;
+        }
     }
+        Ok::<(), EngineError>(())
+    }.await;
+    // Tokio file writes may still be queued when write_all completes. Drain
+    // them before returning an interruption so a retry observes stable length.
+    output.flush().await.map_err(EngineError::File)?;
+    output.sync_data().await.map_err(EngineError::File)?;
+    transfer?;
 
     send_progress(
         &progress,

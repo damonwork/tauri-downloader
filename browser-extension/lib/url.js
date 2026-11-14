@@ -13,7 +13,8 @@ function validUrl(value) {
 function signedUrl(value) {
   try {
     const url = new URL(value);
-    return ["expires", "signature", "policy", "x-amz-signature", "xet-cas-uid"].some((name) => url.searchParams.has(name));
+    const names = new Set([...url.searchParams.keys()].map((name) => name.toLowerCase()));
+    return ["expires", "signature", "policy", "x-amz-signature", "xet-cas-uid"].some((name) => names.has(name));
   } catch {
     return false;
   }

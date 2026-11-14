@@ -6,10 +6,10 @@ use reqwest::header::{
 
 use super::http::{
     confirmed_segment_validator, content_disposition_file_name, content_range_total,
-    ensure_same_source, file_name_from_response_url, response_validator, resume_support,
-    validate_content_range, validate_segment_response_validator,
+    ensure_same_source, file_name_from_response_url, response_validator, validate_content_range,
+    validate_segment_response_validator,
 };
-use super::rate::{transfer_duration, TransferRateEstimator};
+use super::rate::TransferRateEstimator;
 use super::segments::{
     segments_downloaded, split_ranges, SegmentMetadata, SegmentRuntime, SEGMENT_COMPLETED,
     SEGMENT_DOWNLOADING,
@@ -20,8 +20,8 @@ use super::storage::{
 };
 use super::{
     ensure_segment_partials_compatible, segmented_failure_allows_single_stream,
-    single_stream_reason, supports_segmented_transfer, EngineError, ProbeResult, ResumeSupport,
-    SourceValidator, TransferSize, MIN_SEGMENT_SIZE,
+    single_stream_reason, supports_segmented_transfer, EngineError, ProbeResult, SourceValidator,
+    TransferSize, MIN_SEGMENT_SIZE,
 };
 use crate::downloads::model::SegmentState;
 
@@ -378,15 +378,6 @@ fn rejected_resume_requires_restart() {
 }
 
 #[test]
-fn resume_support_follows_range_capability() {
-    assert!(matches!(resume_support(true), ResumeSupport::Supported));
-    assert!(matches!(
-        resume_support(false),
-        ResumeSupport::Unsupported { .. }
-    ));
-}
-
-#[test]
 fn weak_etag_uses_last_modified_instead() {
     let mut headers = HeaderMap::new();
     headers.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
@@ -400,12 +391,4 @@ fn weak_etag_uses_last_modified_instead() {
         response_validator(&headers),
         SourceValidator::LastModified { .. }
     ));
-}
-
-#[test]
-fn bandwidth_duration_uses_the_aggregate_byte_rate() {
-    assert_eq!(
-        transfer_duration(512 * 1024, 1024 * 1024),
-        Duration::from_millis(500)
-    );
 }

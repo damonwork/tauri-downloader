@@ -2,8 +2,8 @@
 import { computed, ref, watch } from "vue";
 import type { DownloadAction, DownloadItem, DownloadSource } from "@/domain/download";
 import { parseRequest } from "@/domain/ingest";
-import { formatBytes, formatSpeed, hostOf, redactUrl } from "@/domain/format";
-import { progressOf } from "@/domain/download";
+import { formatBytes, formatEta, formatSpeed, hostOf, redactUrl } from "@/domain/format";
+import { progressOf, recoveryAction } from "@/domain/download";
 import AppIcon from "./AppIcon.vue";
 import SegmentMonitor from "./SegmentMonitor.vue";
 import SpeedLimitInput from "./SpeedLimitInput.vue";
@@ -63,14 +63,15 @@ const resumeMeta = computed(() => {
     case "unknown": return { label: "Por comprobar", detail: "Se determinará al conectar con el servidor", className: "unknown" };
   }
 });
-const failedAction = computed<DownloadAction>(() =>
-  props.item.state.kind === "failed" && !props.item.state.recoverable ? "restart" : "retry",
-);
-const pausedAction = computed<DownloadAction>(() =>
-  props.item.transfer.downloadedBytes > 0 && props.item.transfer.resume.kind === "unsupported"
-    ? "restart"
-    : "resume",
-);
+watch(() => [props.item.id, props.item.speedLimitBytes] as const, ([id, value], [previousId]) => {
+  speedLimitDraft.value = value;
+  if (id !== previousId) return;
+  speedLimitApplied.value = true;
+  window.setTimeout(() => { speedLimitApplied.value = false; }, 1800);
+});
+
+const failedAction = computed(() => recoveryAction(props.item));
+const pausedAction = computed(() => recoveryAction(props.item));
 
 function submitReplacement(): void {
   try {
@@ -90,8 +91,6 @@ function submitReplacement(): void {
 function applySpeedLimit(): void {
   if (speedLimitDraft.value === props.item.speedLimitBytes) return;
   emit("setSpeedLimit", speedLimitDraft.value);
-  speedLimitApplied.value = true;
-  window.setTimeout(() => { speedLimitApplied.value = false; }, 1800);
 }
 </script>
 
@@ -105,7 +104,8 @@ function applySpeedLimit(): void {
       <div class="detail-actions">
         <button v-if="item.state.kind === 'completed' && canReveal" class="primary" type="button" @click="emit('reveal')"><AppIcon name="folder" :size="16" />Mostrar en carpeta</button>
         <button v-if="item.state.kind === 'downloading'" class="primary" type="button" :disabled="controlsLocked" @click="emit('action','pause')"><AppIcon :name="controlsLocked ? 'activity' : 'pause'" :size="16" />{{ controlsLocked ? 'Finalizando…' : 'Pausar' }}</button>
-        <button v-else-if="item.state.kind !== 'completed'" class="primary" type="button" @click="emit('action',item.state.kind === 'failed' ? failedAction : pausedAction)"><AppIcon :name="item.state.kind === 'failed' || pausedAction === 'restart' ? 'refresh' : 'play'" :size="16" />{{ item.state.kind === 'failed' ? (failedAction === 'restart' ? 'Reiniciar' : 'Reintentar') : (pausedAction === 'restart' ? 'Reiniciar' : 'Reanudar') }}</button>
+        <button v-else-if="item.state.kind !== 'completed' && item.state.kind !== 'queued'" class="primary" type="button" @click="emit('action',item.state.kind === 'failed' ? failedAction : pausedAction)"><AppIcon :name="item.state.kind === 'failed' || pausedAction === 'restart' ? 'refresh' : 'play'" :size="16" />{{ item.state.kind === 'failed' ? (failedAction === 'restart' ? 'Reiniciar' : 'Reintentar') : (pausedAction === 'restart' ? 'Reiniciar' : 'Reanudar') }}</button>
+        <button v-if="item.state.kind === 'queued'" class="primary" type="button" @click="emit('action','pause')">Pausar cola</button>
         <button v-if="item.state.kind !== 'completed'" type="button" :disabled="controlsLocked" @click="replacing = !replacing"><AppIcon name="link" :size="16" />Actualizar enlace</button>
       </div>
 
@@ -113,7 +113,7 @@ function applySpeedLimit(): void {
 
       <section v-if="item.state.kind !== 'completed'" class="speed-limit-card"><h4>LÍMITE DE VELOCIDAD</h4><SpeedLimitInput :key="item.id" v-model="speedLimitDraft" name="detail-speed-limit" label="Límite de velocidad de esta descarga" /><div class="speed-limit-actions"><button type="button" :disabled="controlsLocked" @click="applySpeedLimit"><AppIcon name="bolt" :size="13" />{{ speedLimitApplied ? 'Aplicado' : 'Aplicar límite' }}</button><small>Se aplica al instante sobre los segmentos activos.</small></div></section>
 
-      <section class="details-section"><h4>TRANSFERENCIA</h4><dl><div><dt>Velocidad</dt><dd>{{ formatSpeed(speed) }}</dd></div><div><dt>Tope</dt><dd>{{ item.speedLimitBytes > 0 ? formatSpeed(item.speedLimitBytes) : 'Sin límite' }}</dd></div><div><dt>Configurados</dt><dd>Hasta {{ item.threads }}</dd></div><div><dt>Reanudación</dt><dd :title="resumeMeta.detail">{{ resumeMeta.label }}</dd></div><div><dt>Identidad</dt><dd>{{ validatorLabel }}</dd></div><div><dt>Destino</dt><dd>{{ item.destination }}</dd></div></dl></section>
+      <section class="details-section"><h4>TRANSFERENCIA</h4><dl><div><dt>Velocidad</dt><dd>{{ formatSpeed(speed) }}</dd></div><div><dt>Tiempo restante</dt><dd>{{ formatEta(total, item.transfer.downloadedBytes, speed) }}</dd></div><div><dt>Tope</dt><dd>{{ item.speedLimitBytes > 0 ? formatSpeed(item.speedLimitBytes) : 'Sin límite' }}</dd></div><div><dt>Configurados</dt><dd>Hasta {{ item.threads }}</dd></div><div><dt>Reanudación</dt><dd :title="resumeMeta.detail">{{ resumeMeta.label }}</dd></div><div><dt>Identidad</dt><dd>{{ validatorLabel }}</dd></div><div><dt>Destino</dt><dd>{{ item.destination }}</dd></div></dl></section>
       <SegmentMonitor :item="item" />
       <section class="details-section"><h4>SOLICITUD</h4><dl><div><dt>Headers</dt><dd>{{ item.source.headers.length }}</dd></div><div><dt>Cookies</dt><dd>{{ item.source.cookies.length }}</dd></div><div><dt>Ruta</dt><dd class="url" :title="redactUrl(item.source.url)">{{ redactUrl(item.source.url) }}</dd></div></dl></section>
       <div class="integrity" :class="resumeMeta.className"><AppIcon name="shield" :size="18" /><div><strong>{{ resumeMeta.label }}</strong><p>{{ resumeMeta.detail }}</p></div></div>
@@ -127,4 +127,7 @@ function applySpeedLimit(): void {
 .detail-panel header p,.file-hero p,.hero-progress span,.details-section h4,.details-section dt{color:#84908a}
 .detail-actions button:disabled{border-color:#314038;background:#18201c;color:#77837d;opacity:.72}
 @media(max-width:1180px){.detail-panel{position:fixed;z-index:40;right:0;top:0;box-shadow:-20px 0 50px rgba(0,0,0,.4)}}@media(max-width:520px){.detail-panel{width:100%;}}
+.details-section dt,.details-section dd,.detail-actions button{font-size:12px}
+.state-banner p,.integrity p{font-size:11px;line-height:1.5}
+.detail-actions{grid-template-columns:1fr}.detail-actions button{min-height:40px}
 </style>

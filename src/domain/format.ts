@@ -1,26 +1,28 @@
 export function formatBytes(bytes: number | undefined, decimals = 1): string {
-  if (bytes === undefined) return "—";
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) return "—";
   if (bytes === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
-  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const unitIndex = Math.max(0, Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1));
   return `${(bytes / 1024 ** unitIndex).toFixed(unitIndex === 0 ? 0 : decimals)} ${units[unitIndex]}`;
 }
 
 export function formatSpeed(bytes: number): string {
-  if (bytes <= 0) return "—";
+  if (!Number.isFinite(bytes) || bytes <= 0) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
-  const unitIndex = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const unitIndex = Math.max(0, Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1));
   const value = bytes / 1024 ** unitIndex;
   const decimals = Number.isInteger(value) || value >= 100 ? 0 : 1;
   return `${value.toFixed(decimals)} ${units[unitIndex]}/s`;
 }
 
 export function formatEta(total: number | undefined, downloaded: number, speed: number): string {
-  if (!total || speed <= 0 || downloaded >= total) return "—";
+  if (total === undefined || !Number.isFinite(total) || !Number.isFinite(downloaded)
+    || !Number.isFinite(speed) || total <= 0 || downloaded < 0 || speed <= 0 || downloaded >= total) return "—";
   const seconds = Math.ceil((total - downloaded) / speed);
   if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.ceil(seconds / 60)}m`;
-  return `${Math.floor(seconds / 3600)}h ${Math.ceil((seconds % 3600) / 60)}m`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
 export function relativeTime(isoDate: string): string {

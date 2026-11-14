@@ -6,6 +6,7 @@ import {
   EMPTY_TRANSFER_TELEMETRY,
   fileNameFromUrl,
   progressOf,
+  recoveryAction,
   safeFileName,
   segmentProgressOf,
   type DownloadItem,
@@ -100,5 +101,23 @@ describe("download domain", () => {
     expect(formatSpeed(504 * 1024)).toBe("504 KB/s");
     expect(formatSpeed(2 * 1024 ** 2)).toBe("2 MB/s");
     expect(formatSpeed(2.4 * 1024 ** 2)).toBe("2.4 MB/s");
+  });
+});
+
+
+describe("completion and recovery", () => {
+  it("reserves 100% for completed files, including during finalization", () => {
+    const item = { ...baseItem, transfer: { ...baseItem.transfer, downloadedBytes: 100 } };
+    expect(progressOf(item)).toBe(99);
+    expect(progressOf({ ...item, state: { kind: "completed", completedAt: item.updatedAt } })).toBe(100);
+    expect(progressOf({ ...item, transfer: { ...item.transfer, downloadedBytes: 99.9 } })).toBe(99);
+  });
+  it("restarts failed non-resumable partials, retries resumable ones", () => {
+    const item: DownloadItem = { ...baseItem, state: { kind: "failed", message: "Connection lost", recoverable: true } };
+    expect(recoveryAction(item)).toBe("retry");
+    expect(recoveryAction({ ...item, transfer: { ...item.transfer, resume: { kind: "unsupported", reason: "No ranges" } } })).toBe("restart");
+    expect(recoveryAction({ ...item, transfer: { ...item.transfer, downloadedBytes: 0, resume: { kind: "unsupported", reason: "No ranges" } } })).toBe("retry");
+    expect(recoveryAction({ ...item, state: { kind: "paused" } })).toBe("resume");
+    expect(recoveryAction({ ...item, state: { kind: "failed", message: "Changed", recoverable: false } })).toBe("restart");
   });
 });

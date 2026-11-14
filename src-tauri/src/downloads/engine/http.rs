@@ -12,7 +12,7 @@ use tokio::time;
 use tokio_util::sync::CancellationToken;
 
 use super::{EngineError, ResolvedProxy, DEFAULT_USER_AGENT, MAX_REDIRECTS, METADATA_TIMEOUT};
-use crate::downloads::model::{DownloadSource, ResumeSupport, SourceValidator, TransferSize};
+use crate::downloads::model::{DownloadSource, SourceValidator, TransferSize};
 
 #[derive(Clone)]
 pub(super) struct ProbeResult {
@@ -35,7 +35,7 @@ pub(super) async fn probe_source(
             Err(_) => return Ok(None),
         },
     };
-    if response.status().is_success() {
+    if response.status().is_success() && accepts_ranges(response.headers()) {
         return Ok(Some(ProbeResult {
             size: response_size(response.headers(), 0),
             validator: response_validator(response.headers()),
@@ -55,6 +55,12 @@ pub(super) async fn probe_source(
         },
     };
     if response.status() == StatusCode::PARTIAL_CONTENT {
+        let total =
+            content_range_total(response.headers()).ok_or(EngineError::InvalidContentRange)?;
+        if total == 0 {
+            return Err(EngineError::InvalidContentRange);
+        }
+        validate_content_range(response.headers(), 0, Some(0), Some(total))?;
         return Ok(Some(ProbeResult {
             size: content_range_total(response.headers()).map_or(TransferSize::Unknown, |total| {
                 TransferSize::Known { total_bytes: total }
@@ -254,16 +260,6 @@ pub(super) fn accepts_ranges(headers: &HeaderMap) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case("bytes"))
 }
 
-pub(super) fn resume_support(accepts_ranges: bool) -> ResumeSupport {
-    if !accepts_ranges {
-        ResumeSupport::Unsupported {
-            reason: "El servidor no acepta solicitudes por rango".to_owned(),
-        }
-    } else {
-        ResumeSupport::Supported
-    }
-}
-
 pub(super) fn content_disposition_file_name(headers: &HeaderMap) -> Option<String> {
     let value = headers.get(CONTENT_DISPOSITION)?.to_str().ok()?;
     let mut regular = None;
@@ -376,10 +372,8 @@ pub(super) fn ensure_same_source(
 }
 
 pub(super) fn response_size(headers: &HeaderMap, resumed: u64) -> TransferSize {
-    if resumed > 0 {
-        if let Some(total_bytes) = content_range_total(headers) {
-            return TransferSize::Known { total_bytes };
-        }
+    if let Some(total_bytes) = content_range_total(headers) {
+        return TransferSize::Known { total_bytes };
     }
     headers
         .get(CONTENT_LENGTH)
@@ -428,7 +422,8 @@ pub(super) fn validate_content_range(
         .and_then(|value| value.split_once('-'))
         .and_then(|(start, end)| Some((start.parse::<u64>().ok()?, end.parse::<u64>().ok()?)))
         .ok_or(EngineError::InvalidContentRange)?;
-    if bounds.1 < bounds.0
+    if content_range_total(headers).is_some_and(|total| total == 0 || bounds.1 >= total)
+        || bounds.1 < bounds.0
         || bounds.0 != expected_start
         || expected_end.is_some_and(|end| end != bounds.1)
     {

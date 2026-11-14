@@ -2,6 +2,7 @@ const api = globalThis.browser ?? globalThis.chrome;
 const token = document.getElementById("token");
 const autoCapture = document.getElementById("autoCapture");
 const overlay = document.getElementById("overlay");
+const singleStream = document.getElementById("singleStream");
 const status = document.getElementById("status");
 const candidates = document.getElementById("candidates");
 const logs = document.getElementById("logs");
@@ -82,19 +83,20 @@ async function load() {
   token.value = state.token || "";
   autoCapture.checked = state.autoCapture !== false;
   overlay.checked = state.overlay !== false;
+  singleStream.checked = state.singleStream === true;
   render(state.candidates);
   currentLogs = state.logs || [];
   renderLogs(currentLogs);
 }
 
 document.getElementById("save").addEventListener("click", async () => {
-  await message({ type: "saveState", state: { token: token.value.trim(), autoCapture: autoCapture.checked, overlay: overlay.checked } });
+  await message({ type: "saveState", state: { token: token.value.trim(), autoCapture: autoCapture.checked, overlay: overlay.checked, singleStream: singleStream.checked } });
   status.textContent = "Guardado";
 });
 
 document.getElementById("test").addEventListener("click", async () => {
   status.textContent = "Probando...";
-  await message({ type: "saveState", state: { token: token.value.trim(), autoCapture: autoCapture.checked, overlay: overlay.checked } });
+  await message({ type: "saveState", state: { token: token.value.trim(), autoCapture: autoCapture.checked, overlay: overlay.checked, singleStream: singleStream.checked } });
   const result = await message({ type: "testConnection" });
   status.textContent = result.ok ? "Conectado" : result.error;
   await load();

@@ -7,6 +7,7 @@ const DEFAULTS = {
   token: "",
   autoCapture: true,
   overlay: true,
+  singleStream: false,
   candidates: [],
   logs: [],
 };

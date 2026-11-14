@@ -145,7 +145,8 @@ export interface DownloadStats {
 
 export function progressOf(item: DownloadItem): number {
   if (item.transfer.size.kind === "unknown" || item.transfer.size.totalBytes <= 0) return 0;
-  return Math.min(100, Math.round((item.transfer.downloadedBytes / item.transfer.size.totalBytes) * 100));
+  return Math.max(0, Math.min(item.state.kind === "completed" ? 100 : 99,
+    Math.floor((item.transfer.downloadedBytes / item.transfer.size.totalBytes) * 100)));
 }
 
 export function segmentSize(segment: SegmentProgress): number | undefined {
@@ -241,4 +242,11 @@ function truncateFileName(value: string, maxUnits: number): string {
     stem += character;
   }
   return `${stem.replace(/[. ]+$/g, "")}${extension}` || "descarga";
+}
+
+/** Restart only when continuing would reuse data the server cannot resume. */
+export function recoveryAction(item: DownloadItem): DownloadAction {
+  if ((item.state.kind === "failed" && !item.state.recoverable)
+    || (item.transfer.downloadedBytes > 0 && item.transfer.resume.kind === "unsupported")) return "restart";
+  return item.state.kind === "failed" ? "retry" : "resume";
 }

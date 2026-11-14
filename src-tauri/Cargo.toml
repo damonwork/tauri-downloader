@@ -14,11 +14,20 @@ edition = "2021"
 name = "downloader_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-build"]
+
+[[bin]]
+name = "downloader"
+path = "src/main.rs"
+required-features = ["desktop"]
+
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2", features = [], optional = true }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = [], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }

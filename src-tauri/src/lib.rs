@@ -1,12 +1,19 @@
+#[cfg(feature = "desktop")]
 mod browser_bridge;
+#[cfg(feature = "desktop")]
 mod commands;
+#[cfg(feature = "desktop")]
 mod diagnostics;
-mod downloads;
+pub mod downloads;
 
+#[cfg(feature = "desktop")]
 use diagnostics::{DiagnosticLevel, Diagnostics};
+#[cfg(feature = "desktop")]
 use downloads::manager::DownloadManager;
+#[cfg(feature = "desktop")]
 use tauri::Manager;
 
+#[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

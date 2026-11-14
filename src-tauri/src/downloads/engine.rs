@@ -95,8 +95,8 @@ impl EngineError {
         matches!(
             self,
             Self::Request
-                | Self::HttpStatus(_)
-                | Self::SegmentHttpStatus(_)
+                | Self::HttpStatus(408 | 425 | 429 | 500 | 502 | 503 | 504)
+                | Self::SegmentHttpStatus(408 | 425 | 429 | 500 | 502 | 503 | 504)
                 | Self::SegmentTask
                 | Self::SegmentInterrupted
         )
@@ -155,6 +155,19 @@ impl DownloadEngine {
             input.item.threads,
         )
         .await?;
+        if input.item.source.force_single_stream {
+            if has_segment_partials {
+                return Err(EngineError::ResumeRejected);
+            }
+            return run_single(
+                input,
+                client,
+                cancellation,
+                progress,
+                Some("Configurado para una solicitud continua".to_owned()),
+            )
+            .await;
+        }
         send_progress(
             &progress,
             input.item.transfer.downloaded_bytes,

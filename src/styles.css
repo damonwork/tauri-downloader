@@ -52,3 +52,6 @@ button:disabled { cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.runtime-notice p,.error-banner p{font-size:12px;line-height:1.5}
+.runtime-notice p{color:#aa9b80}

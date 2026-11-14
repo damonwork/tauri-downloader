@@ -201,12 +201,52 @@ dedupContext.fetch = async () => ({ ok: true, json: async () => ({ ok: true, dat
 for (const script of ["lib/log.js", "lib/url.js", "lib/naming.js", "lib/store.js", "lib/capture.js"]) {
   vm.runInContext(readFileSync(join(extension, script), "utf8"), dedupContext, { filename: script });
 }
+for (const parameter of ["Signature", "Policy", "X-Amz-Signature", "signature"]) {
+  assert.strictEqual(vm.runInContext(`signedUrl("https://example.com/file?${parameter}=test")`, dedupContext), true);
+}
 const enqueue = () => vm.runInContext('queueCandidate({ url: "https://example.com/video.mp4", fileName: "video.mp4" })', dedupContext);
 const firstSend = await enqueue();
 const secondSend = await enqueue();
 assert.strictEqual(firstSend.ok, true, "dedup: el primer envío es aceptado");
 assert.strictEqual(secondSend.duplicate, true, "dedup: el segundo envío del mismo recurso se descarta");
 
+// A duplicate must await the bridge response before the browser cancels its own download.
+for (const succeeds of [false, true]) {
+  let release;
+  const responseReady = new Promise((resolve) => { release = resolve; });
+  let requests = 0;
+  dedupContext.fetch = async () => {
+    requests += 1;
+    await responseReady;
+    if (!succeeds) throw new TypeError("Failed to fetch");
+    return { ok: true, json: async () => ({ ok: true, data: {} }) };
+  };
+  const pendingEnqueue = () => vm.runInContext('queueCandidate({ url: "https://example.com/pending.zip", fileName: "pending.zip" })', dedupContext);
+  const original = pendingEnqueue();
+  let settled = false;
+  const duplicate = pendingEnqueue().then((result) => { settled = true; return result; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(settled, false, "in-flight duplicate must wait for confirmation");
+  release();
+  const [first, second] = await Promise.all([original, duplicate]);
+  assert.strictEqual(requests, 1, "concurrent captures share one bridge request");
+  assert.strictEqual(first.ok, succeeds);
+  assert.strictEqual(second.ok, succeeds, "a failed pending send must not cancel the browser download");
+}
+
+
+// Automatic negotiation is the default, with an explicit conservative override.
+for (const singleStream of [false, true]) {
+  dedupContext.api = browserStub({ token: "t", singleStream });
+  let sentInput;
+  dedupContext.fetch = async (_url, options) => {
+    sentInput = JSON.parse(options.body).input;
+    return { ok: true, json: async () => ({ ok: true, data: {} }) };
+  };
+  const result = await vm.runInContext(`queueCandidate({ url: "https://example.com/config-${singleStream}.zip?Signature=test", fileName: "config.zip" })`, dedupContext);
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(sentInput.forceSingleStream, singleStream, "signed URLs use the configured mode, not a blanket restriction");
+}
 const warningContext = vm.createContext({ globalThis: {}, ...webGlobals });
 warningContext.api = browserStub();
 warningContext.fetch = async () => { throw new TypeError("Failed to fetch"); };
