@@ -65,6 +65,45 @@ pub(super) async fn run_single(
     let partial_path = partial_path(&input.destination_dir, &input.item.file_name);
     let resume_at = file_len(&partial_path).await?;
 
+    // A crash/pause after the final write can leave a complete partial. Sending
+    // Range: bytes=<total>- would produce 416 and wrongly demand a restart.
+    if matches!(&input.item.transfer.size, TransferSize::Known { total_bytes } if *total_bytes > 0 && resume_at == *total_bytes)
+    {
+        let mut output = open_partial(&partial_path, true).await?;
+        output.flush().await.map_err(EngineError::File)?;
+        output.sync_all().await.map_err(EngineError::File)?;
+        drop(output);
+        if cancellation.is_cancelled() {
+            return Err(EngineError::Cancelled);
+        }
+        finalize_partial(&partial_path, &final_path).await?;
+        let telemetry = single_telemetry(
+            TransferPhase::Finalizing,
+            reason,
+            &input.item.transfer.size,
+            resume_at,
+            0,
+            SegmentState::Completed,
+            None,
+        );
+        send_progress(
+            &progress,
+            resume_at,
+            &input.item.transfer.size,
+            &input.item.transfer.validator,
+            &input.item.transfer.resume,
+            0,
+            telemetry.clone(),
+        );
+        return Ok(EngineOutput {
+            downloaded_bytes: resume_at,
+            size: input.item.transfer.size,
+            validator: input.item.transfer.validator,
+            resume: input.item.transfer.resume,
+            telemetry,
+        });
+    }
+
     let mut request = apply_source_headers(client.get(&input.item.source.url), &input.item.source)?;
     // The transfer itself confirms range support, without an extra GET.
     request = request.header(RANGE, format!("bytes={resume_at}-"));
@@ -94,6 +133,21 @@ pub(super) async fn run_single(
         _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
         response = request.send() => response.map_err(|_| EngineError::Request)?,
     };
+    // Some origins reject even an initial Range request. A fresh automatic
+    // transfer may safely retry without it; an existing partial must never do so.
+    if resume_at == 0
+        && !input.item.source.force_single_stream
+        && matches!(
+            response.status(),
+            StatusCode::BAD_REQUEST | StatusCode::RANGE_NOT_SATISFIABLE
+        )
+    {
+        let request = apply_source_headers(client.get(&input.item.source.url), &input.item.source)?;
+        response = tokio::select! {
+            _ = cancellation.cancelled() => return Err(EngineError::Cancelled),
+            response = request.send() => response.map_err(|_| EngineError::Request)?,
+        };
+    }
     if !response.status().is_success() {
         return Err(EngineError::HttpStatus(response.status().as_u16()));
     }

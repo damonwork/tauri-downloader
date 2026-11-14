@@ -23,10 +23,11 @@ Revisión realizada el 14 de noviembre de 2026 sobre la interfaz web, el código
 
 - `forceSingleStream` evita HEAD, pruebas de un byte y segmentación. La prueba comprueba una sola petición GET `Range: bytes=0-`.
 - El flujo único solicita rangos y solo declara reanudación tras validar 206 y Content-Range. Se comprueban ambos extremos y el tamaño total incluso desde offset cero; no se acepta una fracción como archivo completo.
-- Si HEAD falla o no anuncia rangos, se consulta el rango real. Una cabecera Accept-Ranges engañosa no basta para declarar reanudación.
+- Si HEAD falla o no anuncia rangos, se consulta el rango real. Si un origen rechaza el rango inicial con 400/416, solo una transferencia nueva en modo automático puede probar GET sin rango; nunca se aplica esa degradación sobre un parcial existente. Una cabecera Accept-Ranges engañosa no basta para declarar reanudación.
 - Se distingue un rechazo de autenticación de un rechazo de rangos. Solo estados HTTP transitorios se marcan recuperables.
 - El limitador comparte presupuesto entre segmentos y vuelve a consultar su valor durante las esperas. Subir o quitar un límite ya no deja un bloque esperando según el valor anterior.
 - En flujo único se publican muestras mientras el limitador espera y se escriben bloques adaptados al límite, evitando que el progreso se quede inmóvil durante un bloque grande.
+- Un parcial que ya tiene el tamaño completo conocido recupera su finalización sin solicitar un rango después del fin del archivo.
 - Ante un corte o pausa se vacían las escrituras pendientes de Tokio antes de devolver el resultado. Se detectó y corrigió una carrera en la que el parcial seguía creciendo después del error.
 - Los segmentos se detienen mediante cancelación cooperativa para poder terminar sus escrituras antes de reconciliar los parciales.
 - La extensión usa negociación automática con el mismo criterio que las URLs manuales; conserva una opción explícita de conexión única para servidores restrictivos.
@@ -36,7 +37,7 @@ Revisión realizada el 14 de noviembre de 2026 sobre la interfaz web, el código
 
 El motor tiene una compilación sin GUI mediante `--no-default-features`; el escritorio mantiene su compilación predeterminada. Se añadieron a CI las pruebas HTTP sin GUI y se mantienen las comprobaciones del escritorio.
 
-Comandos locales: `cargo clippy --locked --no-default-features --all-targets -- -D warnings` y `cargo test --locked --no-default-features`. Las pruebas HTTP usan TCP local real y verifican los bytes de archivos finales y parciales. Cubren flujo único, segmentación, HEAD rechazado, rangos sin cabecera Accept-Ranges, rangos anunciados pero ignorados, límites Content-Range inválidos, cortes, reanudación, cambio de ETag, estados 401/403/404/429/503, cancelación rápida, aumento o eliminación del límite, límite agregado, cuerpo sin tamaño, chunked truncado, destino existente, pausa con parcial estable y telemetría durante la espera del limitador.
+Comandos locales: `cargo clippy --locked --no-default-features --all-targets -- -D warnings` y `cargo test --locked --no-default-features`. Las pruebas HTTP usan TCP local real y verifican los bytes de archivos finales y parciales. Cubren flujo único, segmentación, HEAD rechazado, rangos sin cabecera Accept-Ranges, rangos anunciados pero ignorados, límites Content-Range inválidos, cortes, reanudación, cambio de ETag, estados 401/403/404/429/503, cancelación rápida, aumento o eliminación del límite, límite agregado, cuerpo sin tamaño, chunked truncado, destino existente, pausa con parcial estable, recuperación de finalización, rechazo de rango inicial y telemetría durante la espera del limitador.
 
 ## Alcance y límites
 

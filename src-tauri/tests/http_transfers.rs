@@ -575,3 +575,58 @@ async fn pause_has_stable_partial_size_then_resumes_exactly() {
     run(job).await.unwrap();
     assert_eq!(std::fs::read(dir.0.join("payload.bin")).unwrap(), expected);
 }
+
+#[tokio::test]
+async fn initial_range_rejection_can_retry_without_range_but_partial_cannot() {
+    for status in [400, 416] {
+        let data = vec![11; 4096];
+        let expected = data.clone();
+        let origin = Origin::new(move |r| {
+            if r.range.is_some() {
+                Reply {
+                    status,
+                    headers: vec![("Content-Length".into(), "0".into())],
+                    body: vec![],
+                    truncate: false,
+                }
+            } else {
+                reply(r, &data, false)
+            }
+        })
+        .await;
+        let dir = Sandbox::new();
+        let output = run(input(&origin, &dir, 1, false)).await.unwrap();
+        assert!(matches!(output.resume, ResumeSupport::Unsupported { .. }));
+        assert_eq!(std::fs::read(dir.0.join("payload.bin")).unwrap(), expected);
+        let resumed = Sandbox::new();
+        let partial = resumed.0.join(".payload.bin.fluxor.part");
+        std::fs::write(&partial, [1, 2, 3]).unwrap();
+        assert!(
+            matches!(run(input(&origin,&resumed,1,false)).await,Err(EngineError::HttpStatus(s)) if s==status)
+        );
+        assert_eq!(std::fs::read(partial).unwrap(), [1, 2, 3]);
+    }
+}
+
+#[tokio::test]
+async fn complete_partial_recovers_finalization_without_requesting_past_eof() {
+    let origin = Origin::new(|_| Reply {
+        status: 416,
+        headers: vec![("Content-Length".into(), "0".into())],
+        body: vec![],
+        truncate: false,
+    })
+    .await;
+    let dir = Sandbox::new();
+    let bytes = vec![23; 4096];
+    std::fs::write(dir.0.join(".payload.bin.fluxor.part"), &bytes).unwrap();
+    let mut job = input(&origin, &dir, 1, false);
+    job.item.transfer.size = TransferSize::Known {
+        total_bytes: bytes.len() as u64,
+    };
+    job.item.transfer.downloaded_bytes = bytes.len() as u64;
+    let output = run(job).await.unwrap();
+    assert_eq!(output.downloaded_bytes, bytes.len() as u64);
+    assert_eq!(std::fs::read(dir.0.join("payload.bin")).unwrap(), bytes);
+    assert!(origin.requests.lock().unwrap().is_empty());
+}
